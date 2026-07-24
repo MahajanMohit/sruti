@@ -29,13 +29,19 @@ set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)
 
 add_subdirectory("${LLAMA_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/llama.cpp" EXCLUDE_FROM_ALL)
 
+file(GLOB CONVERTER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/converter/*.cpp")
+
 add_library(sruti_llm SHARED
     sruti_llm.cpp
+    sruti_converter.cpp
+    ${CONVERTER_SOURCES}
 )
 
 target_include_directories(sruti_llm PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/converter"
     "${LLAMA_DIR}/include"
     "${LLAMA_DIR}/ggml/include"
+    "${LLAMA_DIR}/vendor"
 )
 
 # i8mm and dotprod are present on every Snapdragon 8-class part we target and are

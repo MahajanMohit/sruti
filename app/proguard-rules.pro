@@ -7,3 +7,9 @@
 
 # Called from C++ via GetMethodID.
 -keep interface dev.sruti.llm.LlamaBridge$TokenCallback { *; }
+
+-keepclasseswithmembernames,includedescriptorclasses class dev.sruti.convert.ConverterBridge {
+    native <methods>;
+}
+-keep class dev.sruti.convert.ConverterBridge { *; }
+-keep interface dev.sruti.convert.ConverterBridge$ConvertCallback { *; }

@@ -10,9 +10,10 @@ anywhere in the pipeline.
 Inference is **strictly local**. No prompt, no completion, and no telemetry is ever
 sent to a remote model.
 
-> **Status: Phase 0.** The inference path works end to end — GGUF loads, tokens
-> stream, benchmarks run. The safetensors converter and the agent harness are not
-> built yet. See [the plan](#roadmap).
+> **Status: Phase 1.** The inference path works end to end, and the on-device
+> safetensors converter is built and validated — it produces output byte-identical
+> to llama.cpp's own converter. The agent harness is not built yet. See
+> [the roadmap](#roadmap).
 
 ---
 
@@ -79,6 +80,32 @@ adb pull /sdcard/Android/data/dev.sruti/files/benchmarks.md docs/benchmarks.md
 backend needs revisiting before anything gets built on top. The generated report
 states PASS or FAIL explicitly.
 
+## Converting a model on the device
+
+Point Sruti at a Hugging Face checkpoint directory — `config.json`,
+`tokenizer.json` and the `.safetensors` shards — and it produces a quantized GGUF
+without a desktop anywhere in the loop.
+
+Supported: Llama, Mistral, Qwen2, Qwen3, Gemma 2/3 and Phi-3, with byte-level BPE
+tokenizers. SentencePiece-only checkpoints are rejected with a clear message rather
+than converted incorrectly.
+
+The same code runs on the host, which is how it gets validated:
+
+```bash
+cmake -S tools/convert_cli -B build/convert-cli -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build/convert-cli -j"$(nproc)"
+
+./build/convert-cli/sruti-convert <model-dir> out.gguf Q4_K_M
+./build/convert-cli/sruti-run out.gguf "The capital of France is"
+```
+
+**Verified byte-identical to the reference.** Converting SmolLM2-135M (Llama) and
+Qwen2.5-0.5B (Qwen2) with both Sruti and llama.cpp's `convert_hf_to_gguf.py`
+produces bit-identical tensors in every case, identical tokenization to the HF
+tokenizer, and character-identical greedy output. Details and the full list of
+silent-failure traps are in [`docs/converter.md`](docs/converter.md).
+
 ## Testing
 
 ```bash
@@ -86,10 +113,15 @@ states PASS or FAIL explicitly.
 ./tools/run_native_tests.sh        # host-side C++ tests, under ASan + UBSan
 ```
 
-The native tests cover UTF-8 reassembly across token boundaries. This matters more
-than it sounds: a llama.cpp token piece is a byte string, and multi-byte characters
-routinely straddle two tokens — emoji and CJK almost always do. Getting it wrong
-corrupts output silently rather than crashing.
+The native tests cover UTF-8 reassembly across token boundaries, safetensors
+parsing, architecture mapping, the RoPE permutation and vocabulary conversion —
+301 assertions, no device needed.
+
+Two of these matter more than they sound. A llama.cpp token piece is a byte
+string, and multi-byte characters routinely straddle two tokens, so naive
+reassembly corrupts output silently rather than crashing. And the RoPE permutation
+is checked against an independently written reference implementation, because
+getting it wrong produces a model that loads and generates fluent-looking noise.
 
 ---
 
@@ -98,20 +130,33 @@ corrupts output silently rather than crashing.
 ```
 app/src/main/cpp/
   sruti_llm.cpp          JNI bridge: load, tokenize, prefill + decode loop
+  sruti_converter.cpp    JNI bridge: conversion with progress callbacks
   utf8_assembler.h       UTF-8 reassembly across token boundaries (header-only, tested)
+  converter/
+    safetensors.{h,cpp}  header parse + mmap, single-file and sharded
+    arch.{h,cpp}         architecture detection, HF -> GGUF tensor mapping
+    tensor_ops.{h,cpp}   dtype conversion, RoPE permutation (no ggml dependency)
+    vocab.{h,cpp}        tokenizer.json -> GGUF vocabulary
+    converter.{h,cpp}    orchestration; stage 2 delegates to llama_model_quantize
   CMakeLists.txt         links llama.cpp statically into libsruti_llm.so
 
 app/src/main/java/dev/sruti/
   llm/LlamaBridge.kt         raw external fun declarations — unsafe, internal
   llm/LlamaEngine.kt         safe lifecycle wrapper, generation as a Flow
   llm/DeviceCapabilities.kt  performance-core detection for thread count
+  convert/ModelConverter.kt  conversion as a Flow of progress events
   bench/BenchmarkRunner.kt   the Phase 0 gate
   bench/ThermalMonitor.kt    thermal status, battery draw
   bench/ProcessMemory.kt     RSS and peak RSS from /proc/self/status
   ui/StreamCoalescing.kt     batches token updates to the frame cadence
   ui/theme/Motion.kt         the single source of animation specs
 
-native/llama.cpp           git submodule
+tools/
+  convert_cli/           host driver: sruti-convert and sruti-run
+  compare_gguf.py        tensor-by-tensor comparison against the reference
+  run_native_tests.sh    host C++ tests under ASan + UBSan
+
+native/llama.cpp         git submodule
 ```
 
 Three decisions worth knowing about:
@@ -136,7 +181,7 @@ tracks: RSS is what makes the low-memory killer take an interest.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | JNI bridge, decode loop, benchmark harness | code complete, **awaiting on-device numbers** |
-| 1 | Model acquisition + on-device safetensors → GGUF conversion | not started |
+| 1 | On-device safetensors → GGUF conversion | **converter done and validated**; model browser/downloader still to build |
 | 2 | Chat: KV-cache reuse, context management, thermal governor | not started |
 | 3 | Agent harness: grammar-constrained tool calls, Termux shell | not started |
 | 4 | Refinement: motion, haptics, 120 Hz, jank budget in CI | not started |
