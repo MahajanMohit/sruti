@@ -204,6 +204,61 @@ bool parse_hparams(const std::string & config_json, HParams * out, std::string *
     return true;
 }
 
+// --- inspection -------------------------------------------------------------
+
+int64_t estimate_parameter_count(const HParams & hp) {
+    const int64_t q_dim = hp.head_count * hp.head_dim;
+    const int64_t kv_dim = hp.head_count_kv * hp.head_dim;
+
+    // Per block: Q, K, V and the output projection, then gate, up and down.
+    const int64_t attn = hp.hidden_size * (q_dim + 2 * kv_dim + q_dim);
+    const int64_t ffn = 3 * hp.hidden_size * hp.intermediate_size;
+    const int64_t per_block = attn + ffn;
+
+    // The embedding table counts twice unless the output head is tied to it.
+    const int64_t embeddings =
+        hp.vocab_size * hp.hidden_size * (hp.tie_word_embeddings ? 1 : 2);
+
+    return embeddings + hp.block_count * per_block;
+}
+
+CheckpointInfo inspect_config(const std::string & config_json) {
+    CheckpointInfo info;
+
+    HParams hp;
+    std::string err;
+    if (!parse_hparams(config_json, &hp, &err)) {
+        info.supported = false;
+        info.error = err;
+
+        // Even when unsupported, report the architecture so the UI can say which
+        // one was rejected rather than just refusing.
+        try {
+            const json cfg = json::parse(config_json);
+            const auto archs = cfg.find("architectures");
+            if (archs != cfg.end() && archs->is_array() && !archs->empty()) {
+                info.hf_arch = (*archs)[0].get<std::string>();
+            }
+        } catch (const std::exception &) {
+            // Malformed JSON; the parse error already explains it.
+        }
+        return info;
+    }
+
+    info.supported = true;
+    info.hf_arch = hp.hf_arch;
+    info.arch = gguf_arch_name(hp.arch);
+    info.display_name = arch_display_name(hp.arch);
+    info.block_count = hp.block_count;
+    info.hidden_size = hp.hidden_size;
+    info.head_count = hp.head_count;
+    info.head_count_kv = hp.head_count_kv;
+    info.context_length = hp.context_length;
+    info.vocab_size = hp.vocab_size;
+    info.parameter_count = estimate_parameter_count(hp);
+    return info;
+}
+
 // --- tensor plan ------------------------------------------------------------
 
 bool build_tensor_plan(

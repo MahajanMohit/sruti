@@ -10,6 +10,9 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
+#include "arch.h"
 #include "converter.h"
 
 #define LOG_TAG "sruti-convert"
@@ -32,6 +35,36 @@ std::string jstring_to_utf8(JNIEnv * env, jstring s) {
 }  // namespace
 
 extern "C" {
+
+/// Reports whether a checkpoint can be converted, from config.json alone.
+///
+/// Returned as JSON rather than a Java object: config.json is a few kilobytes
+/// while the weights are gigabytes, so this call is what stops the app from
+/// downloading a model it cannot convert. Keeping the marshalling trivial keeps
+/// that path hard to get wrong.
+JNIEXPORT jstring JNICALL
+Java_dev_sruti_convert_ConverterBridge_nativeInspectConfig(
+    JNIEnv * env, jobject, jstring config_json) {
+
+    const sruti::CheckpointInfo info =
+        sruti::inspect_config(jstring_to_utf8(env, config_json));
+
+    nlohmann::json out;
+    out["supported"] = info.supported;
+    out["error"] = info.error;
+    out["hfArch"] = info.hf_arch;
+    out["arch"] = info.arch;
+    out["displayName"] = info.display_name;
+    out["blockCount"] = info.block_count;
+    out["hiddenSize"] = info.hidden_size;
+    out["headCount"] = info.head_count;
+    out["headCountKv"] = info.head_count_kv;
+    out["contextLength"] = info.context_length;
+    out["vocabSize"] = info.vocab_size;
+    out["parameterCount"] = info.parameter_count;
+
+    return env->NewStringUTF(out.dump().c_str());
+}
 
 JNIEXPORT jlong JNICALL
 Java_dev_sruti_convert_ConverterBridge_nativeEstimatedWorkingBytes(

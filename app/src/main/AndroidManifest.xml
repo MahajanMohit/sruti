@@ -30,6 +30,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          Downloading and converting a checkpoint takes minutes, and the user will
+          switch away. dataSync keeps the work alive under Android 16's stricter
+          background quotas.
+        -->
+        <service
+            android:name=".work.ModelWorkService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

@@ -16,6 +16,9 @@ internal object ConverterBridge {
         System.loadLibrary("sruti_llm")
     }
 
+    /** Returns a JSON summary; see [CheckpointInfo]. */
+    external fun nativeInspectConfig(configJson: String): String
+
     external fun nativeEstimatedWorkingBytes(checkpointBytes: Long, quantType: String): Long
 
     /** Returns null on success, or an error message. */

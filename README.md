@@ -80,6 +80,25 @@ adb pull /sdcard/Android/data/dev.sruti/files/benchmarks.md docs/benchmarks.md
 backend needs revisiting before anything gets built on top. The generated report
 states PASS or FAIL explicitly.
 
+## Getting a model onto the device
+
+Search Hugging Face from inside the app, tap a result to check whether it can be
+converted, and Sruti downloads and converts it in the background.
+
+The compatibility check fetches `config.json` alone — a few kilobytes against
+gigabytes of weights — so an unsupported architecture is reported instantly rather
+than after a long download. It also reports the parameter count and both sizes up
+front: what will be downloaded, and what the converted file will be.
+
+Downloads resume from where they stopped, are verified against the SHA-256 the Hub
+publishes, and only take their final filename once complete — a half-written shard
+must never look finished. The whole pipeline runs in a `dataSync` foreground
+service, because a 1–2B model takes minutes and the user will switch away.
+
+**Gated models** (Llama 3.x among them) need a Hugging Face access token, set in
+Settings. Without one the Hub returns 401 and the app says so in those terms
+rather than reporting a generic failure.
+
 ## Converting a model on the device
 
 Point Sruti at a Hugging Face checkpoint directory — `config.json`,
@@ -145,6 +164,11 @@ app/src/main/java/dev/sruti/
   llm/LlamaEngine.kt         safe lifecycle wrapper, generation as a Flow
   llm/DeviceCapabilities.kt  performance-core detection for thread count
   convert/ModelConverter.kt  conversion as a Flow of progress events
+  convert/CheckpointInfo.kt  compatibility + size check from config.json alone
+  hub/HuggingFaceApi.kt      search, file listing, gated-repo auth
+  hub/CheckpointDownloader.kt  resumable, checksummed, atomic
+  hub/ModelStore.kt          model directories and JSON sidecars
+  work/ModelWorkService.kt   foreground service running the whole pipeline
   bench/BenchmarkRunner.kt   the Phase 0 gate
   bench/ThermalMonitor.kt    thermal status, battery draw
   bench/ProcessMemory.kt     RSS and peak RSS from /proc/self/status
@@ -181,7 +205,7 @@ tracks: RSS is what makes the low-memory killer take an interest.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | JNI bridge, decode loop, benchmark harness | code complete, **awaiting on-device numbers** |
-| 1 | On-device safetensors → GGUF conversion | **converter done and validated**; model browser/downloader still to build |
+| 1 | Model acquisition + on-device safetensors → GGUF conversion | **complete** — browse, download, convert, manage |
 | 2 | Chat: KV-cache reuse, context management, thermal governor | not started |
 | 3 | Agent harness: grammar-constrained tool calls, Termux shell | not started |
 | 4 | Refinement: motion, haptics, 120 Hz, jank budget in CI | not started |

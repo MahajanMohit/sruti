@@ -421,6 +421,87 @@ void test_phi3_uses_fused_projections() {
               "fused gate_up becomes ffn_up");
 }
 
+// --- inspection --------------------------------------------------------------
+
+void test_estimates_parameter_count_for_real_models() {
+    // Hyperparameters taken from the published config.json of each model. The
+    // estimate drives the "this is a 1.2 B model, you need 3.4 GB free" preflight,
+    // so being wrong by a large factor would either block valid models or let the
+    // user start a download that cannot finish.
+    struct Case {
+        const char * name;
+        const char * config;
+        int64_t expected;   // published parameter count
+        double tolerance;   // fractional
+    };
+
+    const Case cases[] = {
+        {"SmolLM2-135M",
+         R"({"architectures":["LlamaForCausalLM"],"hidden_size":576,)"
+         R"("intermediate_size":1536,"num_hidden_layers":30,"num_attention_heads":9,)"
+         R"("num_key_value_heads":3,"vocab_size":49152,"tie_word_embeddings":true})",
+         135'000'000, 0.05},
+        {"Qwen2.5-0.5B",
+         R"({"architectures":["Qwen2ForCausalLM"],"hidden_size":896,)"
+         R"("intermediate_size":4864,"num_hidden_layers":24,"num_attention_heads":14,)"
+         R"("num_key_value_heads":2,"vocab_size":151936,"tie_word_embeddings":true})",
+         494'000'000, 0.05},
+        {"Llama-3.2-1B",
+         R"({"architectures":["LlamaForCausalLM"],"hidden_size":2048,)"
+         R"("intermediate_size":8192,"num_hidden_layers":16,"num_attention_heads":32,)"
+         R"("num_key_value_heads":8,"vocab_size":128256,"tie_word_embeddings":true})",
+         1'236'000'000, 0.05},
+    };
+
+    for (const Case & c : cases) {
+        const CheckpointInfo info = inspect_config(c.config);
+        ASSERT_TRUE(info.supported, std::string(c.name) + " is supported");
+
+        const double ratio =
+            static_cast<double>(info.parameter_count) / static_cast<double>(c.expected);
+        ASSERT_TRUE(ratio > 1.0 - c.tolerance && ratio < 1.0 + c.tolerance,
+                    std::string(c.name) + " parameter estimate within tolerance");
+    }
+}
+
+void test_untied_embeddings_counted_twice() {
+    const std::string tied =
+        R"({"architectures":["LlamaForCausalLM"],"hidden_size":64,"intermediate_size":128,)"
+        R"("num_hidden_layers":1,"num_attention_heads":8,"vocab_size":10000,)"
+        R"("tie_word_embeddings":true})";
+    const std::string untied =
+        R"({"architectures":["LlamaForCausalLM"],"hidden_size":64,"intermediate_size":128,)"
+        R"("num_hidden_layers":1,"num_attention_heads":8,"vocab_size":10000,)"
+        R"("tie_word_embeddings":false})";
+
+    const int64_t a = inspect_config(tied).parameter_count;
+    const int64_t b = inspect_config(untied).parameter_count;
+    ASSERT_EQ(b - a, int64_t(10000 * 64), "untied output head adds one embedding table");
+}
+
+void test_inspect_reports_unsupported_architecture_with_its_name() {
+    const CheckpointInfo info = inspect_config(config_for("MambaForCausalLM"));
+    ASSERT_TRUE(!info.supported, "unsupported architecture reported");
+    ASSERT_EQ(info.hf_arch, std::string("MambaForCausalLM"),
+              "the rejected architecture is still named");
+    ASSERT_TRUE(!info.error.empty(), "an explanation is provided");
+}
+
+void test_inspect_survives_malformed_json() {
+    const CheckpointInfo info = inspect_config("{not json");
+    ASSERT_TRUE(!info.supported, "malformed config rejected");
+    ASSERT_TRUE(!info.error.empty(), "an explanation is provided");
+}
+
+void test_inspect_reports_shape_for_supported_models() {
+    const CheckpointInfo info = inspect_config(config_for("Qwen3ForCausalLM"));
+    ASSERT_TRUE(info.supported, "supported");
+    ASSERT_EQ(info.arch, std::string("qwen3"), "gguf architecture name");
+    ASSERT_EQ(info.display_name, std::string("Qwen3"), "display name");
+    ASSERT_EQ(info.block_count, int64_t(2), "block count");
+    ASSERT_EQ(info.context_length, int64_t(4096), "context length");
+}
+
 // --- metadata ---------------------------------------------------------------
 
 void test_metadata_carries_required_keys() {
@@ -543,6 +624,12 @@ int main() {
     test_missing_required_tensor_fails_loudly();
     test_plan_covers_every_block();
     test_phi3_uses_fused_projections();
+
+    test_estimates_parameter_count_for_real_models();
+    test_untied_embeddings_counted_twice();
+    test_inspect_reports_unsupported_architecture_with_its_name();
+    test_inspect_survives_malformed_json();
+    test_inspect_reports_shape_for_supported_models();
 
     test_metadata_carries_required_keys();
     test_metadata_is_namespaced_per_architecture();

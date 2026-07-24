@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Notification icons are masked to a single colour, so this is silhouette only. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M3,11h2v2h-2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M7,8h2v8h-2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M11,4h2v16h-2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M15,7h2v10h-2z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M19,10h2v4h-2z" />
+</vector>

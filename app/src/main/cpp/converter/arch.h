@@ -114,6 +114,43 @@ struct HParams {
     }
 };
 
+/// What can be learned about a checkpoint from config.json alone.
+///
+/// config.json is a few kilobytes while the weights are gigabytes, so fetching it
+/// first turns "download 2.5 GB, then discover the architecture is unsupported"
+/// into an instant answer.
+struct CheckpointInfo {
+    bool supported = false;
+    /// Why it is unsupported. Empty when `supported`.
+    std::string error;
+
+    std::string hf_arch;
+    /// GGUF architecture name, e.g. "llama".
+    std::string arch;
+    /// Human-readable, e.g. "Qwen3".
+    std::string display_name;
+
+    int64_t block_count = 0;
+    int64_t hidden_size = 0;
+    int64_t head_count = 0;
+    int64_t head_count_kv = 0;
+    int64_t context_length = 0;
+    int64_t vocab_size = 0;
+
+    /// Estimated parameter count, derived from the shapes config.json implies.
+    int64_t parameter_count = 0;
+};
+
+/// Estimates a model's parameter count from its hyperparameters.
+///
+/// Counts the tensors that dominate — embeddings, attention projections and the
+/// feed-forward block — and ignores norms and biases, which together are well
+/// under a tenth of a percent.
+int64_t estimate_parameter_count(const HParams & hp);
+
+/// Reads config.json and reports whether this checkpoint can be converted.
+CheckpointInfo inspect_config(const std::string & config_json);
+
 /// Maps an HF `architectures[0]` string to a supported architecture.
 Arch arch_from_hf_name(const std::string & hf_arch);
 
