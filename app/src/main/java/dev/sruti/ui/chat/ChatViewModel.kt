@@ -38,11 +38,23 @@ data class DisplayMessage(
     val tokenCount: Int = 0,
 )
 
+/** A past conversation, as listed in the history sheet. */
+data class ConversationSummary(
+    val id: Long,
+    val title: String,
+    val updatedAtMillis: Long,
+    val modelFileName: String,
+)
+
 data class ChatUiState(
     val models: List<InstalledModel> = emptyList(),
     val selectedModel: InstalledModel? = null,
     val isLoadingModel: Boolean = false,
     val modelReady: Boolean = false,
+
+    val conversations: List<ConversationSummary> = emptyList(),
+    /** Zero until the current conversation has been written, i.e. has a message. */
+    val conversationId: Long = 0,
 
     val messages: List<DisplayMessage> = emptyList(),
     /** Text of the reply currently being generated. */
@@ -92,6 +104,24 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             ModelWorkService.state.collect { state ->
                 if (state is ModelJobState.Succeeded) refreshModels()
+            }
+        }
+
+        viewModelScope.launch {
+            dao.deleteEmptyConversations()
+            dao.observeConversations().collect { rows ->
+                _uiState.update {
+                    it.copy(
+                        conversations = rows.map { row ->
+                            ConversationSummary(
+                                id = row.id,
+                                title = row.title,
+                                updatedAtMillis = row.updatedAtMillis,
+                                modelFileName = row.modelFileName,
+                            )
+                        },
+                    )
+                }
             }
         }
     }
@@ -165,21 +195,24 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Clears the transcript to start a fresh conversation.
+     *
+     * No row is written here. A conversation only exists once it has a message —
+     * otherwise every model load, every app launch and every tap of "new" left an
+     * identical empty entry in the history, which is worse than no history at all.
+     * The previous conversation is already saved and reachable from the list.
+     */
     fun startNewConversation() {
-        val model = _uiState.value.selectedModel ?: return
+        if (_uiState.value.selectedModel == null) return
         generationJob?.cancel()
 
         viewModelScope.launch {
             session?.reset()
-            conversationId = dao.insert(
-                ConversationEntity(
-                    title = "New conversation",
-                    modelFileName = model.file.name,
-                    systemPrompt = _uiState.value.systemPrompt,
-                ),
-            )
+            conversationId = 0
             _uiState.update {
                 it.copy(
+                    conversationId = 0,
                     messages = emptyList(),
                     streamingText = "",
                     contextUsed = 0,
@@ -187,6 +220,48 @@ class ChatViewModel @Inject constructor(
                     error = null,
                 )
             }
+        }
+    }
+
+    /** Reopens a stored conversation, replaying it into the transcript. */
+    fun openConversation(id: Long) {
+        generationJob?.cancel()
+
+        viewModelScope.launch {
+            val stored = dao.conversation(id) ?: return@launch
+            val messages = dao.messages(id)
+
+            // The cache holds the tokens of whatever was on screen before, and
+            // none of them belong to this conversation.
+            session?.reset()
+            conversationId = id
+
+            _uiState.update {
+                it.copy(
+                    conversationId = id,
+                    systemPrompt = stored.systemPrompt,
+                    messages = messages.map { row ->
+                        DisplayMessage(
+                            id = row.id,
+                            role = ChatMessage.Role.fromId(row.role),
+                            content = row.content,
+                            tokensPerSecond = row.tokensPerSecond,
+                            tokenCount = row.tokenCount,
+                        )
+                    },
+                    streamingText = "",
+                    contextUsed = 0,
+                    lastMetrics = null,
+                    error = null,
+                )
+            }
+        }
+    }
+
+    fun deleteConversation(id: Long) {
+        viewModelScope.launch {
+            dao.deleteConversation(id)
+            if (conversationId == id) startNewConversation()
         }
     }
 
@@ -209,6 +284,22 @@ class ChatViewModel @Inject constructor(
         if (_uiState.value.isGenerating) return
 
         generationJob = viewModelScope.launch {
+            // The conversation row is created here rather than when the transcript
+            // was cleared, so an untouched screen never becomes a history entry.
+            // Titled from this first message, which is what makes the list
+            // navigable without opening every entry.
+            if (conversationId == 0L) {
+                val model = _uiState.value.selectedModel ?: return@launch
+                conversationId = dao.insert(
+                    ConversationEntity(
+                        title = trimmed.take(60),
+                        modelFileName = model.file.name,
+                        systemPrompt = _uiState.value.systemPrompt,
+                    ),
+                )
+                _uiState.update { it.copy(conversationId = conversationId) }
+            }
+
             val userMessageId = dao.insert(
                 MessageEntity(
                     conversationId = conversationId,
@@ -228,14 +319,6 @@ class ChatViewModel @Inject constructor(
                     isGenerating = true,
                     error = null,
                 )
-            }
-
-            // Title the conversation from its first message so the list is
-            // navigable without opening every entry.
-            if (_uiState.value.messages.size == 1) {
-                dao.conversation(conversationId)?.let { existing ->
-                    dao.update(existing.copy(title = trimmed.take(60)))
-                }
             }
 
             val history = buildHistory()

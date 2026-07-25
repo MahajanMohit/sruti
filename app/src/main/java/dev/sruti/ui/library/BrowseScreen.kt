@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,7 +46,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.sruti.convert.CheckpointInfo
 import dev.sruti.convert.QuantType
+import dev.sruti.hub.FormatFilter
 import dev.sruti.hub.RemoteModelSummary
+import dev.sruti.hub.SearchFilters
+import dev.sruti.hub.SizeBand
 import dev.sruti.ui.formatBytes
 import dev.sruti.ui.formatParameters
 import dev.sruti.ui.theme.Motion
@@ -56,6 +62,7 @@ fun BrowseScreen(
     tokenSet: Boolean,
     busy: Boolean,
     onQueryChanged: (String) -> Unit,
+    onFiltersChanged: (SearchFilters) -> Unit,
     onInspect: (String) -> Unit,
     onAcquire: (String) -> Unit,
     onOpenModelPage: (String) -> Unit,
@@ -97,6 +104,8 @@ fun BrowseScreen(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            FilterBar(filters = state.filters, onFiltersChanged = onFiltersChanged)
 
             AnimatedVisibility(
                 visible = !tokenSet,
@@ -143,6 +152,24 @@ fun BrowseScreen(
                 contentPadding = PaddingValues(bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                if (state.results.isEmpty() && !state.isSearching && state.error == null) {
+                    item {
+                        Text(
+                            text = if (state.filters.isActive) {
+                                "Nothing matched. Filters narrow hard — sizes come from " +
+                                    "the model's name, so a model that does not state " +
+                                    "its size is filtered out."
+                            } else if (state.query.isBlank()) {
+                                "Search for a model, or paste its full id."
+                            } else {
+                                "No models matched that search."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
                 items(state.results, key = { it.repoId }) { model ->
                     RepoCard(
                         model = model,
@@ -156,6 +183,65 @@ fun BrowseScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Filter chips over the search.
+ *
+ * A single scrolling row rather than a dialog, because every one of these is a
+ * one-tap toggle and hiding them behind a sheet would cost more taps than the
+ * filtering saves. Tapping a selected chip clears it.
+ */
+@Composable
+private fun FilterBar(
+    filters: SearchFilters,
+    onFiltersChanged: (SearchFilters) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FormatFilter.entries.filter { it != FormatFilter.ANY }.forEach { format ->
+            val selected = filters.format == format
+            FilterChip(
+                selected = selected,
+                onClick = {
+                    onFiltersChanged(
+                        filters.copy(format = if (selected) FormatFilter.ANY else format),
+                    )
+                },
+                label = { Text(format.label) },
+            )
+        }
+
+        SizeBand.entries.forEach { band ->
+            val selected = filters.size == band
+            FilterChip(
+                selected = selected,
+                onClick = { onFiltersChanged(filters.copy(size = if (selected) null else band)) },
+                label = { Text(band.label) },
+            )
+        }
+
+        FilterChip(
+            selected = filters.hideGated,
+            onClick = { onFiltersChanged(filters.copy(hideGated = !filters.hideGated)) },
+            label = { Text("Open access") },
+        )
+
+        SearchFilters.FAMILIES.forEach { family ->
+            val selected = filters.family == family
+            FilterChip(
+                selected = selected,
+                onClick = {
+                    onFiltersChanged(filters.copy(family = if (selected) null else family))
+                },
+                label = { Text(family) },
+            )
         }
     }
 }
@@ -200,8 +286,14 @@ private fun RepoCard(
         }
 
         Text(
-            text = "${model.downloads} downloads · ${model.likes} likes" +
-                if (!model.hasSafetensors) " · no safetensors" else "",
+            text = buildList {
+                add("${model.downloads} downloads")
+                add("${model.likes} likes")
+                // Worth calling out: it means no conversion step and a much
+                // smaller download.
+                if (model.hasGguf) add("GGUF ready")
+                if (!model.hasSafetensors && !model.hasGguf) add("no safetensors")
+            }.joinToString(" · "),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

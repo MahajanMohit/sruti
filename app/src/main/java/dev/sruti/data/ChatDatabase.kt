@@ -84,6 +84,20 @@ interface ChatDao {
 
     @Query("UPDATE conversations SET updatedAtMillis = :now WHERE id = :id")
     suspend fun touch(id: Long, now: Long = System.currentTimeMillis())
+
+    /**
+     * Removes conversations that never received a message.
+     *
+     * An earlier version created a row the moment a model finished loading, so a
+     * user who opened the app several times without typing accumulated a list of
+     * identical empty entries. New conversations are now only written once they
+     * have content; this clears what the old behaviour left behind.
+     */
+    @Query(
+        "DELETE FROM conversations WHERE id NOT IN " +
+            "(SELECT DISTINCT conversationId FROM messages)",
+    )
+    suspend fun deleteEmptyConversations()
 }
 
 @Database(

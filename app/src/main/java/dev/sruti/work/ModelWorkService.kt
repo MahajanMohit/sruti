@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import dagger.hilt.android.AndroidEntryPoint
 import dev.sruti.MainActivity
@@ -53,6 +54,9 @@ class ModelWorkService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob())
     private var job: Job? = null
+
+    private var lastNotifiedAt = 0L
+    private var lastNotifiedPhase: ModelJobState.Running.Phase? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -120,7 +124,7 @@ class ModelWorkService : Service() {
             // times smaller than the safetensors it came from and skips
             // conversion entirely — downloading 3 GB to rebuild a 1 GB file that
             // is sitting right there would be indefensible.
-            val prebuilt = checkpoint.prebuiltGguf.firstOrNull { it.actualSize > 0 }
+            val prebuilt = checkpoint.pickGguf(quantType.id)
             if (prebuilt != null) {
                 downloadPrebuiltGguf(repoId, checkpoint, prebuilt, quantType, info, ::publish)
                 return
@@ -144,7 +148,12 @@ class ModelWorkService : Service() {
             // the quantized output both exist on disk at once.
             val reserve = converter.estimatedWorkingBytes(checkpoint.totalBytes, quantType)
 
-            downloader.download(checkpoint, checkpointDir, reserveBytes = reserve)
+            downloader.download(
+                checkpoint,
+                checkpoint.requiredFiles,
+                checkpointDir,
+                reserveBytes = reserve,
+            )
                 .collect { event ->
                     when (event) {
                         is DownloadEvent.Progress -> publish(
@@ -247,8 +256,7 @@ class ModelWorkService : Service() {
             return
         }
 
-        val single = checkpoint.copy(files = listOf(file))
-        downloader.download(single, store.modelsDir)
+        downloader.download(checkpoint, listOf(file), store.modelsDir)
             .collect { event ->
                 if (event is DownloadEvent.Progress) {
                     publish(
@@ -325,7 +333,20 @@ class ModelWorkService : Service() {
         )
     }
 
+    /**
+     * Updates the ongoing notification, at most once a second.
+     *
+     * Each post is a Binder round trip, and the platform starts throttling an
+     * app that updates a notification too often anyway. Rebuilding it on every
+     * progress event bought nothing and competed with touch handling.
+     */
     private fun notify(state: ModelJobState.Running) {
+        val now = SystemClock.elapsedRealtime()
+        val phaseChanged = state.phase != lastNotifiedPhase
+        if (!phaseChanged && now - lastNotifiedAt < NOTIFICATION_INTERVAL_MS) return
+        lastNotifiedAt = now
+        lastNotifiedPhase = state.phase
+
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(
             NOTIFICATION_ID,
@@ -386,6 +407,9 @@ class ModelWorkService : Service() {
     companion object {
         private const val CHANNEL_ID = "model_work"
         private const val NOTIFICATION_ID = 1001
+
+        /** Minimum gap between ongoing-notification updates. */
+        private const val NOTIFICATION_INTERVAL_MS = 1000L
         private const val ACTION_CANCEL = "dev.sruti.action.CANCEL_MODEL_WORK"
         private const val EXTRA_REPO_ID = "repo_id"
         private const val EXTRA_QUANT = "quant"

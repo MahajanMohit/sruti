@@ -570,6 +570,80 @@ void test_metadata_states_key_length_for_llama() {
                 "key_length always stated for Llama");
 }
 
+/// transformers 5.x moved rope_theta into a nested "rope_parameters" object.
+///
+/// The old layout still dominates the Hub, so both have to work. Reading only
+/// the old one is invisible in every check that matters -- the file converts,
+/// loads and generates -- and shows up only as answers that fall apart as the
+/// context grows.
+void test_reads_rope_theta_from_either_config_layout() {
+    std::string err;
+
+    HParams legacy;
+    ASSERT_TRUE(parse_hparams(config_for("Qwen2ForCausalLM"), &legacy, &err), err);
+    ASSERT_EQ(10000, static_cast<int64_t>(legacy.rope_freq_base),
+                  "top-level rope_theta is read");
+
+    // config_for already sets a top-level rope_theta, so this also pins that the
+    // nested object wins rather than merely being consulted as a fallback.
+    HParams nested;
+    ASSERT_TRUE(
+        parse_hparams(
+            config_for("Qwen2ForCausalLM",
+                       R"("rope_parameters":{"rope_theta":1000000.0,"rope_type":"default"})"),
+            &nested, &err),
+        err);
+    ASSERT_EQ(1000000, static_cast<int64_t>(nested.rope_freq_base),
+                  "nested rope_parameters.rope_theta is read");
+
+    const auto kv = build_metadata(nested, "q");
+    const auto * emitted = find_kv(kv, "qwen2.rope.freq_base");
+    ASSERT_TRUE(emitted != nullptr, "rope.freq_base is emitted");
+}
+
+/// A rope_type of "default" means no scaling at all.
+void test_default_rope_type_is_not_treated_as_scaling() {
+    std::string err;
+    HParams hp;
+    ASSERT_TRUE(
+        parse_hparams(
+            config_for("Qwen2ForCausalLM",
+                       R"("rope_parameters":{"rope_theta":1000000.0,"rope_type":"default"})"),
+            &hp, &err),
+        err);
+    ASSERT_TRUE(hp.rope_scaling_type.empty(), "\"default\" is not a scaling type");
+
+    const auto kv = build_metadata(hp, "q");
+    ASSERT_TRUE(find_kv(kv, "qwen2.rope.scaling.type") == nullptr,
+                "no scaling key is emitted for an unscaled model");
+}
+
+/// Real scaling still comes through, from either layout.
+void test_real_rope_scaling_survives_both_layouts() {
+    std::string err;
+
+    HParams old_layout;
+    ASSERT_TRUE(
+        parse_hparams(
+            config_for("LlamaForCausalLM",
+                       R"("rope_scaling":{"rope_type":"linear","factor":4.0})"),
+            &old_layout, &err),
+        err);
+    ASSERT_TRUE(old_layout.rope_scaling_type == "linear", "old-layout scaling type");
+
+    HParams new_layout;
+    ASSERT_TRUE(
+        parse_hparams(
+            config_for("LlamaForCausalLM",
+                       R"("rope_parameters":{"rope_theta":500000.0,)"
+                       R"("rope_type":"linear","factor":4.0})"),
+            &new_layout, &err),
+        err);
+    ASSERT_TRUE(new_layout.rope_scaling_type == "linear", "new-layout scaling type");
+    ASSERT_EQ(500000, static_cast<int64_t>(new_layout.rope_freq_base),
+                  "new-layout theta alongside scaling");
+}
+
 void test_sliding_window_is_gated_on_use_sliding_window() {
     // Qwen2.5 declares a 32k window with use_sliding_window false. Emitting the
     // key regardless switches on attention the model was never trained with.
@@ -637,6 +711,9 @@ int main() {
     test_metadata_omits_key_length_for_qwen_without_explicit_head_dim();
     test_metadata_states_key_length_for_llama();
     test_sliding_window_is_gated_on_use_sliding_window();
+    test_reads_rope_theta_from_either_config_layout();
+    test_default_rope_type_is_not_treated_as_scaling();
+    test_real_rope_scaling_survives_both_layouts();
 
     return test_summary("arch");
 }

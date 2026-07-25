@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -31,6 +32,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,7 +43,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -60,6 +66,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.sruti.llm.ChatMessage
 import dev.sruti.ui.theme.Motion
+import java.text.DateFormat
+import java.util.Date
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,11 +77,27 @@ fun ChatScreen(
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onNewConversation: () -> Unit,
+    onOpenConversation: (Long) -> Unit,
+    onDeleteConversation: (Long) -> Unit,
     onSelectModel: (dev.sruti.hub.InstalledModel) -> Unit,
     onOpenModels: () -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
     var modelMenuOpen by remember { mutableStateOf(false) }
+    var historyOpen by remember { mutableStateOf(false) }
+
+    if (historyOpen) {
+        HistorySheet(
+            conversations = state.conversations,
+            currentId = state.conversationId,
+            onOpen = { id ->
+                historyOpen = false
+                onOpenConversation(id)
+            },
+            onDelete = onDeleteConversation,
+            onDismiss = { historyOpen = false },
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -90,6 +114,17 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    // Sits before "new" on purpose: it is what makes starting a
+                    // new conversation safe, by showing where the old one went.
+                    IconButton(
+                        onClick = { historyOpen = true },
+                        enabled = state.conversations.isNotEmpty(),
+                    ) {
+                        Icon(
+                            Icons.Outlined.History,
+                            contentDescription = "Past conversations",
+                        )
+                    }
                     IconButton(onClick = onNewConversation, enabled = state.modelReady) {
                         Icon(Icons.Outlined.Add, contentDescription = "New conversation")
                     }
@@ -384,5 +419,87 @@ fun ChatEmptyState(onOpenModels: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = onOpenModels) { Text("Add a model") }
         }
+    }
+}
+
+/**
+ * Past conversations, newest first.
+ *
+ * A bottom sheet rather than a screen: the list is the only thing on it, and
+ * reaching it should not cost a navigation the user then has to back out of.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistorySheet(
+    conversations: List<ConversationSummary>,
+    currentId: Long,
+    onOpen: (Long) -> Unit,
+    onDelete: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Text(
+            text = "Conversations",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+        )
+        HorizontalDivider()
+
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 32.dp),
+        ) {
+            items(conversations, key = { it.id }) { conversation ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpen(conversation.id) }
+                        .padding(start = 24.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = conversation.title,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (conversation.id == currentId) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = relativeTime(conversation.updatedAtMillis),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = { onDelete(conversation.id) }) {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = "Delete conversation",
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Coarse on purpose: within a chat list the exact minute is never the question.
+private fun relativeTime(millis: Long): String {
+    val elapsed = System.currentTimeMillis() - millis
+    val minutes = elapsed / 60_000
+    return when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 60 * 24 -> "${minutes / 60} h ago"
+        minutes < 60 * 24 * 7 -> "${minutes / (60 * 24)} d ago"
+        else -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(millis))
     }
 }

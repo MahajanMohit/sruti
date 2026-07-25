@@ -42,9 +42,13 @@ target_link_libraries(sruti-convert PRIVATE llama ggml)
 
 # Loads a converted GGUF and generates text, so a conversion can be checked
 # end to end rather than only by comparing bytes.
-add_executable(sruti-run run.cpp)
+add_executable(sruti-run
+    run.cpp
+    "${SRUTI_ROOT}/app/src/main/cpp/gguf_summary.cpp"
+)
 
 target_include_directories(sruti-run PRIVATE
+    "${SRUTI_ROOT}/app/src/main/cpp"
     "${LLAMA_DIR}/include"
     "${LLAMA_DIR}/ggml/include"
 )

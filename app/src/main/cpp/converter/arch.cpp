@@ -157,8 +157,20 @@ bool parse_hparams(const std::string & config_json, HParams * out, std::string *
     hp.head_count_kv = get_or<int64_t>(cfg, {"num_key_value_heads"}, hp.head_count);
 
     hp.rms_norm_eps = get_or<float>(cfg, {"rms_norm_eps", "layer_norm_eps"}, 1e-5f);
-    hp.rope_freq_base = get_or<float>(cfg, {"rope_theta"}, 10000.0f);
     hp.tie_word_embeddings = get_or<bool>(cfg, {"tie_word_embeddings"}, false);
+
+    // RoPE settings moved into a "rope_parameters" object in transformers 5.x.
+    //
+    // Both layouts are in the wild, and reading only the old one is a silent
+    // failure of the worst kind: rope_theta falls back to 10000 where the model
+    // wants 1000000, the file converts and loads without complaint, and the
+    // output degrades as the context grows rather than failing outright.
+    const nlohmann::json * rope_obj = &cfg;
+    const auto params_it = cfg.find("rope_parameters");
+    if (params_it != cfg.end() && params_it->is_object()) {
+        rope_obj = &*params_it;
+    }
+    hp.rope_freq_base = get_or<float>(*rope_obj, {"rope_theta"}, 10000.0f);
 
     // Qwen3 and Gemma3 state head_dim explicitly and it is NOT hidden/heads for
     // them; deriving it would silently produce a wrong rope dimension count.
@@ -180,10 +192,21 @@ bool parse_hparams(const std::string & config_json, HParams * out, std::string *
     hp.final_logit_softcapping = get_or<float>(cfg, {"final_logit_softcapping"}, 0.0f);
     hp.query_pre_attn_scalar = get_or<float>(cfg, {"query_pre_attn_scalar"}, 0.0f);
 
-    const auto rope_it = cfg.find("rope_scaling");
-    if (rope_it != cfg.end() && rope_it->is_object()) {
-        hp.rope_scaling_type = get_or<std::string>(*rope_it, {"rope_type", "type"}, "");
-        hp.rope_scaling_factor = get_or<float>(*rope_it, {"factor"}, 0.0f);
+    // Scaling lives beside the theta: under rope_scaling in the old layout, and
+    // merged into rope_parameters in the new one.
+    const auto scaling_it = cfg.find("rope_scaling");
+    const nlohmann::json * scaling_obj =
+        (scaling_it != cfg.end() && scaling_it->is_object()) ? &*scaling_it : rope_obj;
+    if (scaling_obj->is_object()) {
+        hp.rope_scaling_type = get_or<std::string>(*scaling_obj, {"rope_type", "type"}, "");
+        hp.rope_scaling_factor = get_or<float>(*scaling_obj, {"factor"}, 0.0f);
+    }
+
+    // "default" means no scaling; writing it as a scaling type would make
+    // llama.cpp look for a factor that is not there.
+    if (hp.rope_scaling_type == "default") {
+        hp.rope_scaling_type.clear();
+        hp.rope_scaling_factor = 0.0f;
     }
 
     // Validate the fields that every downstream step depends on.

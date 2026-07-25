@@ -10,6 +10,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -17,6 +18,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -27,6 +30,7 @@ import dev.sruti.ui.library.BrowseScreen
 import dev.sruti.ui.library.LibraryScreen
 import dev.sruti.ui.library.LibraryViewModel
 import dev.sruti.ui.library.AboutScreen
+import dev.sruti.ui.library.ModelDetailScreen
 import dev.sruti.ui.library.SettingsScreen
 import dev.sruti.ui.phase0.Phase0Screen
 import dev.sruti.llm.DeviceCapabilities
@@ -40,6 +44,12 @@ private object Routes {
     const val SETTINGS = "settings"
     const val BENCHMARK = "benchmark"
     const val ABOUT = "about"
+
+    /** The model's absolute path, encoded — it contains slashes. */
+    const val MODEL_DETAIL = "model/{path}"
+
+    fun modelDetail(path: String): String =
+        "model/" + android.net.Uri.encode(path)
 }
 
 private data class TopLevelDestination(
@@ -109,6 +119,8 @@ fun SrutiApp() {
                     onSend = viewModel::send,
                     onStop = viewModel::stop,
                     onNewConversation = viewModel::startNewConversation,
+                    onOpenConversation = viewModel::openConversation,
+                    onDeleteConversation = viewModel::deleteConversation,
                     onSelectModel = viewModel::selectModel,
                     onOpenModels = { navController.navigate(Routes.LIBRARY) },
                 )
@@ -122,6 +134,9 @@ fun SrutiApp() {
                     state = library,
                     onBrowse = { navController.navigate(Routes.BROWSE) },
                     onDeleteModel = viewModel::delete,
+                    onOpenModel = { model ->
+                        navController.navigate(Routes.modelDetail(model.file.absolutePath))
+                    },
                     onDeleteCheckpoint = viewModel::delete,
                     onCancelJob = viewModel::cancelJob,
                     onDismissJob = viewModel::acknowledgeJob,
@@ -140,6 +155,7 @@ fun SrutiApp() {
                     tokenSet = library.tokenSet,
                     busy = library.job is ModelJobState.Running,
                     onQueryChanged = viewModel::onQueryChanged,
+                    onFiltersChanged = viewModel::onFiltersChanged,
                     onInspect = viewModel::inspect,
                     onAcquire = { repoId ->
                         viewModel.startAcquire(repoId)
@@ -166,6 +182,28 @@ fun SrutiApp() {
                     onOpenAbout = { navController.navigate(Routes.ABOUT) },
                     onBack = { navController.popBackStack() },
                 )
+            }
+
+            composable(
+                Routes.MODEL_DETAIL,
+                arguments = listOf(navArgument("path") { type = NavType.StringType }),
+            ) { entry ->
+                val viewModel: LibraryViewModel = hiltViewModel()
+                val detail by viewModel.detail.collectAsStateWithLifecycle()
+                val path = entry.arguments?.getString("path").orEmpty()
+
+                // Keyed on the path so navigating from one model to another
+                // re-reads rather than showing the previous model's header.
+                LaunchedEffect(path) { viewModel.openDetail(path) }
+
+                detail.model?.let { model ->
+                    ModelDetailScreen(
+                        model = model,
+                        facts = detail.facts,
+                        loading = detail.loading,
+                        onBack = { navController.popBackStack() },
+                    )
+                }
             }
 
             composable(Routes.BENCHMARK) {

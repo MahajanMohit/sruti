@@ -31,6 +31,14 @@ internal object LlamaBridge {
     external fun nativeModelSizeBytes(handle: Long): Long
     external fun nativeModelCtxTrain(handle: Long): Int
 
+    /**
+     * Metadata read straight from a GGUF header, without loading the weights.
+     *
+     * Tab-separated `label\tvalue` rows, one per line; empty when the file
+     * cannot be read as GGUF.
+     */
+    external fun nativeGgufSummary(path: String): String
+
     external fun nativeNewContext(modelHandle: Long, nCtx: Int, nThreads: Int, nBatch: Int): Long
     external fun nativeFreeContext(handle: Long)
     external fun nativeResetContext(handle: Long)

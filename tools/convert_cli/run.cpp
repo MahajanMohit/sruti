@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "llama.h"
+#include "gguf_summary.h"
 
 namespace {
 
@@ -69,13 +70,31 @@ int main(int argc, char ** argv) {
     if (argc < 2) {
         std::fprintf(stderr,
                      "usage: %s <model.gguf> [prompt] [n_tokens] [--chat]\n"
+                     "       %s <model.gguf> --info\n"
                      "\n"
-                     "  --chat  wrap the prompt in the model's chat template\n",
-                     argv[0]);
+                     "  --chat  wrap the prompt in the model's chat template\n"
+                     "  --info  print the header summary the app's model detail "
+                     "screen shows\n",
+                     argv[0], argv[0]);
         return 2;
     }
 
     const std::string model_path = argv[1];
+
+    // Same code path the app uses, so what the detail screen will show can be
+    // checked here rather than only by installing on a phone.
+    for (int i = 2; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--info") == 0) {
+            const std::string summary = sruti::gguf_summary(model_path.c_str());
+            if (summary.empty()) {
+                std::fprintf(stderr, "not a readable GGUF: %s\n", model_path.c_str());
+                return 1;
+            }
+            std::fputs(summary.c_str(), stdout);
+            return 0;
+        }
+    }
+
     std::string prompt = argc > 2 ? argv[2] : "The capital of France is";
     const int n_predict = argc > 3 ? std::atoi(argv[3]) : 48;
 

@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +58,7 @@ fun LibraryScreen(
     state: LibraryUiState,
     onBrowse: () -> Unit,
     onDeleteModel: (InstalledModel) -> Unit,
+    onOpenModel: (InstalledModel) -> Unit,
     onDeleteCheckpoint: (StagedCheckpoint) -> Unit,
     onCancelJob: () -> Unit,
     onDismissJob: () -> Unit,
@@ -103,7 +105,11 @@ fun LibraryScreen(
             }
 
             items(state.installed, key = { it.file.absolutePath }) { model ->
-                InstalledModelCard(model = model, onDelete = { onDeleteModel(model) })
+                InstalledModelCard(
+                    model = model,
+                    onDelete = { onDeleteModel(model) },
+                    onOpen = { onOpenModel(model) },
+                )
             }
 
             if (state.staged.isNotEmpty()) {
@@ -232,12 +238,17 @@ private fun StorageRow(usedBytes: Long) {
 }
 
 @Composable
-private fun InstalledModelCard(model: InstalledModel, onDelete: () -> Unit) {
+private fun InstalledModelCard(
+    model: InstalledModel,
+    onDelete: () -> Unit,
+    onOpen: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onOpen)
             .padding(start = 18.dp, top = 14.dp, bottom = 14.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

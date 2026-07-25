@@ -36,6 +36,86 @@ data class RemoteModelSummary(
 
     /** Whether the repository advertises safetensors weights. */
     val hasSafetensors: Boolean get() = "safetensors" in tags
+
+    /** Whether the repository already publishes a runnable GGUF. */
+    val hasGguf: Boolean get() = "gguf" in tags
+
+    /**
+     * Parameter count in billions, read out of the repository name.
+     *
+     * Search results carry no size field — the Hub only reports one on the model
+     * page — so the name is the only signal available before downloading
+     * anything. Naming it is near-universal (`Qwen2.5-0.5B-Instruct`,
+     * `Llama-3.2-1B`, `SmolLM2-135M`), and where it is absent the model is simply
+     * unfiltered rather than wrongly excluded.
+     */
+    val billionsFromName: Double?
+        get() {
+            val match = SIZE_IN_NAME.find(name) ?: return null
+            val value = match.groupValues[1].toDoubleOrNull() ?: return null
+            return if (match.groupValues[2].lowercase() == "m") value / 1000.0 else value
+        }
+
+    private companion object {
+        val SIZE_IN_NAME = Regex("""(?:^|[-_. ])(\d+(?:\.\d+)?)([bBmM])(?:$|[-_. ])""")
+    }
+}
+
+/** Size bands, chosen around what a phone can actually run. */
+enum class SizeBand(val label: String, val range: ClosedFloatingPointRange<Double>) {
+    UNDER_1B("Under 1B", 0.0..1.0),
+    ONE_TO_TWO("1–2B", 1.0..2.0),
+    TWO_TO_FOUR("2–4B", 2.0..4.0),
+    ;
+
+    fun contains(billions: Double) = billions > range.start - 1e-9 && billions <= range.endInclusive
+}
+
+/** What a repository has to offer, which decides how long it takes to install. */
+enum class FormatFilter(val label: String) {
+    ANY("Any format"),
+
+    /** Already quantized: downloads smaller and skips conversion entirely. */
+    GGUF("Ready to run"),
+
+    /** Raw weights, which this app converts on device. */
+    SAFETENSORS("Convert on device"),
+}
+
+/**
+ * Narrowing applied to a search.
+ *
+ * Split deliberately between what the Hub can filter and what it cannot. Library
+ * tags and the architecture term go to the server, where they narrow the result
+ * set before it is paged. Size and gating are applied here, because the Hub
+ * exposes neither in a search response — which is also why the request asks for
+ * more rows than it shows whenever a local filter is active.
+ */
+data class SearchFilters(
+    val size: SizeBand? = null,
+    val format: FormatFilter = FormatFilter.ANY,
+    val family: String? = null,
+    val hideGated: Boolean = false,
+) {
+    val isActive: Boolean
+        get() = size != null || format != FormatFilter.ANY || family != null || hideGated
+
+    /** True when narrowing happens after the response, so more rows are needed. */
+    internal val narrowsLocally: Boolean get() = size != null || hideGated
+
+    internal fun keeps(model: RemoteModelSummary): Boolean {
+        if (hideGated && model.isGated) return false
+        if (size != null) {
+            val billions = model.billionsFromName ?: return false
+            if (!size.contains(billions)) return false
+        }
+        return true
+    }
+
+    internal companion object {
+        /** Architecture families the converter supports, as search terms. */
+        val FAMILIES = listOf("Llama", "Qwen", "Gemma", "Phi", "Mistral", "SmolLM")
+    }
 }
 
 /** One file in a repository. */
@@ -80,8 +160,23 @@ data class RemoteCheckpoint(
      */
     val prebuiltGguf: List<RemoteFile>
         get() = files
-            .filter { it.path.endsWith(".gguf", ignoreCase = true) }
+            .filter { it.path.endsWith(".gguf", ignoreCase = true) && it.actualSize > 0 }
             .sortedBy { it.actualSize }
+
+    /**
+     * The published GGUF that best matches [quantId], or the smallest one.
+     *
+     * A repository often publishes several quantizations of the same model, and
+     * taking whichever sorted first would quietly ignore the setting the user
+     * chose. Falling back to the smallest is the right default when none matches:
+     * it is the one most likely to run on a phone.
+     */
+    fun pickGguf(quantId: String): RemoteFile? {
+        val candidates = prebuiltGguf
+        return candidates.firstOrNull {
+            it.path.substringAfterLast('/').contains(quantId, ignoreCase = true)
+        } ?: candidates.firstOrNull()
+    }
 
     /** Files a conversion actually needs; skips READMEs, images and ONNX exports. */
     val requiredFiles: List<RemoteFile>
@@ -144,10 +239,15 @@ class HuggingFaceApi(
      * usually carries no pipeline tag at all — so it is invisible to search while
      * being perfectly convertible. Typing its full id finds it.
      */
-    suspend fun search(query: String, limit: Int = 25): List<RemoteModelSummary> {
+    suspend fun search(
+        query: String,
+        filters: SearchFilters = SearchFilters(),
+        limit: Int = 25,
+    ): List<RemoteModelSummary> {
         val trimmed = query.trim().removePrefix("https://huggingface.co/").trim('/')
 
-        // An exact repo id is a lookup, not a search.
+        // An exact repo id is a lookup, not a search. Filters do not apply — the
+        // user named one specific model, and hiding it would only be confusing.
         if (trimmed.count { it == '/' } == 1 && !trimmed.contains(' ')) {
             runCatching { modelInfo(trimmed) }
                 .onSuccess { return listOf(it) }
@@ -155,22 +255,37 @@ class HuggingFaceApi(
             // slash, and a failed lookup should not swallow the query.
         }
 
-        val tagged = rawSearch(trimmed, limit, pipelineFiltered = true)
-        if (tagged.isNotEmpty()) return tagged
+        // Post-filtering discards rows, so ask for enough that a full page can
+        // still be shown afterwards.
+        val fetch = if (filters.narrowsLocally) limit * 4 else limit
+        val terms = listOfNotNull(trimmed.takeIf { it.isNotBlank() }, filters.family)
+            .joinToString(" ")
+
+        val tagged = rawSearch(terms, filters, fetch, pipelineFiltered = true)
+        val kept = tagged.filter(filters::keeps)
+        if (kept.isNotEmpty()) return kept.take(limit)
 
         // Nothing tagged matched. Retry unfiltered rather than reporting no
         // results for a model that exists but is not labelled.
-        return rawSearch(trimmed, limit, pipelineFiltered = false)
+        return rawSearch(terms, filters, fetch, pipelineFiltered = false)
+            .filter(filters::keeps)
+            .take(limit)
     }
 
     private suspend fun rawSearch(
         query: String,
+        filters: SearchFilters,
         limit: Int,
         pipelineFiltered: Boolean,
     ): List<RemoteModelSummary> {
         val url = buildString {
             append("$BASE/api/models?limit=$limit&sort=downloads&direction=-1")
             if (pipelineFiltered) append("&filter=text-generation")
+            when (filters.format) {
+                FormatFilter.GGUF -> append("&filter=gguf")
+                FormatFilter.SAFETENSORS -> append("&filter=safetensors")
+                FormatFilter.ANY -> Unit
+            }
             if (query.isNotBlank()) {
                 append("&search=").append(query.urlEncoded())
             }

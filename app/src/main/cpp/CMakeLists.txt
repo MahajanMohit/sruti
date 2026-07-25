@@ -50,6 +50,7 @@ add_library(sruti_llm SHARED
     sruti_llm.cpp
     sruti_chat.cpp
     sruti_converter.cpp
+    gguf_summary.cpp
     ${CONVERTER_SOURCES}
 )
 

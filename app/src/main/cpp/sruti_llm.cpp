@@ -16,6 +16,7 @@
 #include "llama.h"
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "gguf_summary.h"
 #include "utf8_assembler.h"
 
 #define LOG_TAG "sruti-native"
@@ -294,6 +295,14 @@ Java_dev_sruti_llm_LlamaBridge_nativeResetContext(JNIEnv *, jobject, jlong handl
         auto * ctx = reinterpret_cast<llama_context *>(handle);
         llama_memory_clear(llama_get_memory(ctx), /*data=*/true);
     }
+}
+
+JNIEXPORT jstring JNICALL
+Java_dev_sruti_llm_LlamaBridge_nativeGgufSummary(JNIEnv * env, jobject, jstring path) {
+    const char * c_path = env->GetStringUTFChars(path, nullptr);
+    const std::string summary = sruti::gguf_summary(c_path);
+    env->ReleaseStringUTFChars(path, c_path);
+    return env->NewStringUTF(summary.c_str());
 }
 
 JNIEXPORT jintArray JNICALL

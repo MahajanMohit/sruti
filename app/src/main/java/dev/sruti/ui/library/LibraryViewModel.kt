@@ -11,7 +11,10 @@ import dev.sruti.hub.HuggingFaceApi
 import dev.sruti.hub.InstalledModel
 import dev.sruti.hub.ModelStore
 import dev.sruti.hub.RemoteModelSummary
+import dev.sruti.hub.SearchFilters
 import dev.sruti.hub.StagedCheckpoint
+import dev.sruti.llm.GgufFact
+import dev.sruti.llm.GgufInspector
 import dev.sruti.settings.SettingsStore
 import dev.sruti.work.ModelJobState
 import dev.sruti.work.ModelWorkService
@@ -37,12 +40,19 @@ data class LibraryUiState(
 
 data class BrowseUiState(
     val query: String = "",
+    val filters: SearchFilters = SearchFilters(),
     val results: List<RemoteModelSummary> = emptyList(),
     val isSearching: Boolean = false,
     val error: String? = null,
     /** Inspection of the currently selected repository, keyed by repo id. */
     val inspecting: String? = null,
     val inspected: Map<String, CheckpointInfo> = emptyMap(),
+)
+
+data class ModelDetailUiState(
+    val model: InstalledModel? = null,
+    val facts: List<GgufFact> = emptyList(),
+    val loading: Boolean = false,
 )
 
 @HiltViewModel
@@ -58,6 +68,9 @@ class LibraryViewModel @Inject constructor(
 
     private val _browse = MutableStateFlow(BrowseUiState())
     val browse: StateFlow<BrowseUiState> = _browse.asStateFlow()
+
+    private val _detail = MutableStateFlow(ModelDetailUiState())
+    val detail: StateFlow<ModelDetailUiState> = _detail.asStateFlow()
 
     private var searchJob: Job? = null
 
@@ -113,11 +126,22 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Applies a filter change.
+     *
+     * Re-searches immediately rather than debouncing: a tap is a deliberate act,
+     * unlike the keystrokes [onQueryChanged] has to absorb.
+     */
+    fun onFiltersChanged(filters: SearchFilters) {
+        _browse.update { it.copy(filters = filters) }
+        search()
+    }
+
     fun search(query: String = _browse.value.query) {
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
             _browse.update { it.copy(isSearching = true, error = null) }
-            runCatching { api.search(query) }
+            runCatching { api.search(query, _browse.value.filters) }
                 .onSuccess { results ->
                     _browse.update { it.copy(results = results, isSearching = false) }
                 }
@@ -159,6 +183,30 @@ class LibraryViewModel @Inject constructor(
             _browse.update {
                 it.copy(inspecting = null, inspected = it.inspected + (repoId to info))
             }
+        }
+    }
+
+    // --- model detail -------------------------------------------------------
+
+    /**
+     * Loads one model's details.
+     *
+     * Resolved from the store rather than from [library], because this view model
+     * is scoped to the detail route and its own list has not been read yet when
+     * the screen first composes. Keyed by absolute path rather than by position,
+     * which would point at a different model once another finishes converting.
+     */
+    fun openDetail(path: String) {
+        _detail.value = ModelDetailUiState(loading = true)
+        viewModelScope.launch {
+            val model = store.installedModels().firstOrNull { it.file.absolutePath == path }
+            if (model == null) {
+                _detail.value = ModelDetailUiState(loading = false)
+                return@launch
+            }
+            _detail.value = ModelDetailUiState(model = model, loading = true)
+            val facts = GgufInspector.inspect(model.file)
+            _detail.update { it.copy(facts = facts, loading = false) }
         }
     }
 

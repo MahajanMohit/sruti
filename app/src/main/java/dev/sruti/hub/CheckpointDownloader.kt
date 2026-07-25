@@ -56,17 +56,29 @@ class CheckpointDownloader(
         stat.availableBlocksLong * stat.blockSizeLong
     }.getOrDefault(0L)
 
+    /**
+     * Downloads [files] from [checkpoint] into [targetDir].
+     *
+     * The caller says which files, rather than this deciding: a conversion wants
+     * the safetensors set, and a repository that already publishes a GGUF wants
+     * exactly that one file. Re-deriving the list here silently dropped anything
+     * the conversion allowlist did not recognise — a `.gguf` among them — and
+     * reported it as the repository having no weights at all.
+     */
     fun download(
         checkpoint: RemoteCheckpoint,
+        files: List<RemoteFile>,
         targetDir: File,
         /** Extra headroom to leave free, for the conversion that follows. */
         reserveBytes: Long = 0,
     ): Flow<DownloadEvent> = flow {
         targetDir.mkdirs()
 
-        val files = checkpoint.requiredFiles
         if (files.isEmpty()) {
-            throw DownloadException("${checkpoint.repoId} has no safetensors weights to download")
+            throw DownloadException(
+                "${checkpoint.repoId} publishes no files this app can use — it needs " +
+                    "either .safetensors weights or a .gguf",
+            )
         }
 
         // Preflight against what is still outstanding, so a resumed download is
@@ -85,6 +97,20 @@ class CheckpointDownloader(
 
         val totalBytes = files.sumOf { it.actualSize }
         var completedBytes = 0L
+
+        // Progress is reported every 64 KiB read, which on a fast connection is
+        // several hundred times a second. Each one becomes a state update, a
+        // recomposition and a notification post on the main thread, and at that
+        // rate the UI stops responding to touches altogether — the app looks
+        // frozen for the whole download. Nothing is lost by rate-limiting: no
+        // display can show more than a handful of updates a second anyway.
+        var lastEmitNanos = 0L
+        fun shouldEmit(): Boolean {
+            val now = System.nanoTime()
+            if (now - lastEmitNanos < PROGRESS_INTERVAL_NANOS) return false
+            lastEmitNanos = now
+            return true
+        }
 
         files.forEachIndexed { index, file ->
             val target = File(targetDir, file.path)
@@ -109,18 +135,32 @@ class CheckpointDownloader(
                 file = file,
                 target = target,
                 onBytes = { bytesInFile ->
-                    emit(
-                        DownloadEvent.Progress(
-                            fileIndex = index + 1,
-                            fileCount = files.size,
-                            currentFile = file.path,
-                            bytesDone = completedBytes + bytesInFile,
-                            bytesTotal = totalBytes,
-                        ),
-                    )
+                    if (shouldEmit()) {
+                        emit(
+                            DownloadEvent.Progress(
+                                fileIndex = index + 1,
+                                fileCount = files.size,
+                                currentFile = file.path,
+                                bytesDone = completedBytes + bytesInFile,
+                                bytesTotal = totalBytes,
+                            ),
+                        )
+                    }
                 },
             )
             completedBytes += file.actualSize
+
+            // Unconditional, so the bar always lands on the true total for this
+            // file rather than wherever the last throttled sample happened to be.
+            emit(
+                DownloadEvent.Progress(
+                    fileIndex = index + 1,
+                    fileCount = files.size,
+                    currentFile = file.path,
+                    bytesDone = completedBytes,
+                    bytesTotal = totalBytes,
+                ),
+            )
         }
 
         emit(DownloadEvent.Completed(targetDir))
@@ -226,5 +266,10 @@ class CheckpointDownloader(
         if (!partial.renameTo(target)) {
             throw DownloadException("Could not move ${file.path} into place")
         }
+    }
+
+    private companion object {
+        /** ~8 progress updates a second: smooth to watch, cheap to render. */
+        const val PROGRESS_INTERVAL_NANOS = 125_000_000L
     }
 }
