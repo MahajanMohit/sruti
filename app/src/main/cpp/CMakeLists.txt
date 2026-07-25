@@ -33,6 +33,7 @@ file(GLOB CONVERTER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/converter/*.cpp")
 
 add_library(sruti_llm SHARED
     sruti_llm.cpp
+    sruti_chat.cpp
     sruti_converter.cpp
     ${CONVERTER_SOURCES}
 )

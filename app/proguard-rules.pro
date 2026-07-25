@@ -13,3 +13,9 @@
 }
 -keep class dev.sruti.convert.ConverterBridge { *; }
 -keep interface dev.sruti.convert.ConverterBridge$ConvertCallback { *; }
+
+-keepclasseswithmembernames,includedescriptorclasses class dev.sruti.llm.ChatBridge {
+    native <methods>;
+}
+-keep class dev.sruti.llm.ChatBridge { *; }
+-keep interface dev.sruti.llm.ChatBridge$ChatCallback { *; }

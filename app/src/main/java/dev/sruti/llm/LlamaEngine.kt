@@ -82,6 +82,7 @@ class LlamaEngine private constructor(
     private val modelHandle: Long,
     private val contextHandle: Long,
     private val dispatcher: CoroutineDispatcher,
+    private val configuredContextLength: Int,
 ) : AutoCloseable {
 
     private val closed = AtomicBoolean(false)
@@ -96,6 +97,21 @@ class LlamaEngine private constructor(
     fun tokenize(text: String, addSpecial: Boolean = true): IntArray {
         check(!closed.get()) { "engine is closed" }
         return LlamaBridge.nativeTokenize(modelHandle, text, addSpecial)
+    }
+
+    /** Size of the context window this engine was created with. */
+    val contextLength: Int get() = configuredContextLength
+
+    /**
+     * Opens a stateful conversation over this model.
+     *
+     * The session holds the KV cache between turns, so it must be closed before
+     * the engine is. Only one session at a time is meaningful: they would share a
+     * single context and overwrite each other's cache.
+     */
+    fun newChatSession(governor: ThermalGovernor? = null): ChatSession {
+        check(!closed.get()) { "engine is closed" }
+        return ChatSession(modelHandle, contextHandle, dispatcher, governor)
     }
 
     /** Drops the KV cache so the next generation starts from a clean context. */
@@ -184,7 +200,7 @@ class LlamaEngine private constructor(
                 throw t
             }
 
-            LlamaEngine(model, ctx, dispatcher)
+            LlamaEngine(model, ctx, dispatcher, nCtx)
         }
     }
 }

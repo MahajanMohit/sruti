@@ -31,16 +31,58 @@ std::string piece_for(const llama_vocab * vocab, llama_token token) {
 
 }  // namespace
 
+/// Formats a single user turn with the model's own chat template.
+///
+/// Verifies the other half of what the converter wrote: bit-identical tensors
+/// prove the weights are right, but an instruct model also needs its
+/// tokenizer.chat_template to survive conversion and be applicable. Without it,
+/// the model is prompted as a base model and answers markedly worse.
+bool apply_chat_template(
+    const llama_model * model, const std::string & user_text, std::string * out) {
+
+    const char * tmpl = llama_model_chat_template(model, nullptr);
+    if (tmpl == nullptr) {
+        return false;
+    }
+
+    const llama_chat_message messages[] = {
+        {"user", user_text.c_str()},
+    };
+
+    std::vector<char> buf(user_text.size() * 4 + 2048);
+    int32_t written = llama_chat_apply_template(
+        tmpl, messages, 1, /*add_ass=*/true, buf.data(), static_cast<int32_t>(buf.size()));
+    if (written > static_cast<int32_t>(buf.size())) {
+        buf.resize(static_cast<size_t>(written) + 1);
+        written = llama_chat_apply_template(
+            tmpl, messages, 1, true, buf.data(), static_cast<int32_t>(buf.size()));
+    }
+    if (written < 0) {
+        return false;
+    }
+
+    out->assign(buf.data(), static_cast<size_t>(written));
+    return true;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 2) {
         std::fprintf(stderr,
-                     "usage: %s <model.gguf> [prompt] [n_tokens]\n", argv[0]);
+                     "usage: %s <model.gguf> [prompt] [n_tokens] [--chat]\n"
+                     "\n"
+                     "  --chat  wrap the prompt in the model's chat template\n",
+                     argv[0]);
         return 2;
     }
 
     const std::string model_path = argv[1];
-    const std::string prompt = argc > 2 ? argv[2] : "The capital of France is";
+    std::string prompt = argc > 2 ? argv[2] : "The capital of France is";
     const int n_predict = argc > 3 ? std::atoi(argv[3]) : 48;
+
+    bool chat_mode = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--chat") == 0) chat_mode = true;
+    }
 
     llama_log_set(quiet_log, nullptr);
     llama_backend_init();
@@ -52,6 +94,18 @@ int main(int argc, char ** argv) {
         return 1;
     }
     const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    if (chat_mode) {
+        std::string formatted;
+        if (!apply_chat_template(model, prompt, &formatted)) {
+            std::fprintf(stderr,
+                         "error: model declares no usable chat template\n");
+            llama_model_free(model);
+            return 1;
+        }
+        std::printf("chat template applied:\n---\n%s\n---\n\n", formatted.c_str());
+        prompt = formatted;
+    }
 
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx = 512;

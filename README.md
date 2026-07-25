@@ -10,10 +10,9 @@ anywhere in the pipeline.
 Inference is **strictly local**. No prompt, no completion, and no telemetry is ever
 sent to a remote model.
 
-> **Status: Phase 1.** The inference path works end to end, and the on-device
-> safetensors converter is built and validated — it produces output byte-identical
-> to llama.cpp's own converter. The agent harness is not built yet. See
-> [the roadmap](#roadmap).
+> **Status: Phase 2.** Browse, download, convert and chat all work. The converter
+> produces output byte-identical to llama.cpp's own. The agent harness is not
+> built yet. See [the roadmap](#roadmap).
 
 ---
 
@@ -125,6 +124,34 @@ produces bit-identical tensors in every case, identical tokenization to the HF
 tokenizer, and character-identical greedy output. Details and the full list of
 silent-failure traps are in [`docs/converter.md`](docs/converter.md).
 
+## Chat
+
+Three things make multi-turn chat work rather than merely function.
+
+**The KV cache is reused across turns.** Without it, turn ten reprocesses the
+entire conversation before producing its first token, and a chat app gets steadily
+slower the longer you use it. The native side owns the token history and diffs the
+full prompt against it each turn, prefilling only what actually changed — the UI
+reports the cache hit rate so this is visible rather than assumed.
+
+That ownership matters for correctness, not just speed: when a conversation
+outgrows the context window the cache is evicted, and any position the Kotlin layer
+believed in would be silently wrong. The system prompt is preserved through
+eviction, otherwise it is the first thing dropped and the model's instructions
+disappear mid-conversation.
+
+**Chat templates come from the model.** Instruct models are trained with a specific
+turn structure; prompting one as a base model produces markedly worse output. The
+template is read from the GGUF and applied through `llama_chat_apply_template`.
+Where a model declares none, the fallback is a plain transcript — a compromise,
+and labelled as one.
+
+**The thermal governor slows generation on purpose.** Sustained decode draws
+several watts and the SoC will throttle within minutes. Left alone it sheds clock
+abruptly part-way through a reply. Backing off earlier and more gently keeps the
+pace even, and the reason is shown on screen — an unexplained crawl reads as a
+broken app, a labelled one reads as a hot phone.
+
 ## Testing
 
 ```bash
@@ -163,6 +190,9 @@ app/src/main/java/dev/sruti/
   llm/LlamaBridge.kt         raw external fun declarations — unsafe, internal
   llm/LlamaEngine.kt         safe lifecycle wrapper, generation as a Flow
   llm/DeviceCapabilities.kt  performance-core detection for thread count
+  llm/ChatSession.kt         stateful conversation, KV reuse, chat templates
+  llm/ThermalGovernor.kt     deliberate throttling before the SoC intervenes
+  data/ChatDatabase.kt       conversation and message persistence (Room)
   convert/ModelConverter.kt  conversion as a Flow of progress events
   convert/CheckpointInfo.kt  compatibility + size check from config.json alone
   hub/HuggingFaceApi.kt      search, file listing, gated-repo auth
@@ -206,7 +236,7 @@ tracks: RSS is what makes the low-memory killer take an interest.
 |---|---|---|
 | 0 | JNI bridge, decode loop, benchmark harness | code complete, **awaiting on-device numbers** |
 | 1 | Model acquisition + on-device safetensors → GGUF conversion | **complete** — browse, download, convert, manage |
-| 2 | Chat: KV-cache reuse, context management, thermal governor | not started |
+| 2 | Chat: KV-cache reuse, context management, thermal governor | **complete** |
 | 3 | Agent harness: grammar-constrained tool calls, Termux shell | not started |
 | 4 | Refinement: motion, haptics, 120 Hz, jank budget in CI | not started |
 | 5 | Signed release via GitHub Releases | not started |

@@ -6,7 +6,10 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import androidx.room.Room
 import dev.sruti.convert.ModelConverter
+import dev.sruti.data.ChatDao
+import dev.sruti.data.ChatDatabase
 import dev.sruti.hub.CheckpointDownloader
 import dev.sruti.hub.HuggingFaceApi
 import dev.sruti.hub.ModelStore
@@ -84,4 +87,12 @@ object AppModule {
     fun provideModelConverter(
         @ComputeDispatcher dispatcher: CoroutineDispatcher,
     ): ModelConverter = ModelConverter(dispatcher)
+
+    @Provides
+    @Singleton
+    fun provideChatDatabase(@ApplicationContext context: Context): ChatDatabase =
+        Room.databaseBuilder(context, ChatDatabase::class.java, "sruti_chat.db").build()
+
+    @Provides
+    fun provideChatDao(database: ChatDatabase): ChatDao = database.chatDao()
 }
