@@ -15,7 +15,9 @@ internal object LlamaBridge {
         System.loadLibrary("sruti_llm")
     }
 
-    external fun nativeBackendInit()
+    /** [nativeLibDir] must be the app's nativeLibraryDir; see [NativeBackends]. */
+    external fun nativeBackendInit(nativeLibDir: String)
+    external fun nativeBackendCount(): Int
     external fun nativeBackendFree()
 
     external fun nativeLoadModel(path: String, nGpuLayers: Int): Long

@@ -14,6 +14,7 @@
 
 #include "llama.h"
 #include "ggml.h"
+#include "ggml-backend.h"
 #include "utf8_assembler.h"
 
 #define LOG_TAG "sruti-native"
@@ -86,11 +87,39 @@ void throw_illegal_state(JNIEnv * env, const char * msg) {
 
 extern "C" {
 
+/// Loads ggml's CPU backend variants and initialises llama.
+///
+/// `native_lib_dir` must be the application's nativeLibraryDir. ggml's own
+/// discovery searches the executable's directory and the working directory, which
+/// on Android are /system/bin and / — never where an APK's libraries live. Without
+/// an explicit path no backend registers at all and model loading fails outright,
+/// so this is not an optimisation.
 JNIEXPORT void JNICALL
-Java_dev_sruti_llm_LlamaBridge_nativeBackendInit(JNIEnv *, jobject) {
+Java_dev_sruti_llm_LlamaBridge_nativeBackendInit(
+    JNIEnv * env, jobject, jstring native_lib_dir) {
+
     llama_log_set(forward_log, nullptr);
+
+    const std::string dir = jstring_to_utf8(env, native_lib_dir);
+    if (!dir.empty()) {
+        ggml_backend_load_all_from_path(dir.c_str());
+    } else {
+        ggml_backend_load_all();
+    }
+
     llama_backend_init();
-    LOGI("llama backend initialised");
+
+    // Each variant declares a score from the CPU features it needs; ggml keeps
+    // the highest-scoring one the device can actually run.
+    LOGI("llama backend initialised, %zu ggml backend(s) registered from %s",
+         static_cast<size_t>(ggml_backend_reg_count()),
+         dir.empty() ? "(default paths)" : dir.c_str());
+}
+
+/// Number of registered ggml backends. Zero means inference cannot work.
+JNIEXPORT jint JNICALL
+Java_dev_sruti_llm_LlamaBridge_nativeBackendCount(JNIEnv *, jobject) {
+    return static_cast<jint>(ggml_backend_reg_count());
 }
 
 JNIEXPORT void JNICALL

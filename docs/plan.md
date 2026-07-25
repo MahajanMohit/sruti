@@ -2,8 +2,8 @@
 
 ## Context
 
-`mahajanmohit/sruti` is an empty repo. The goal is a native Android app for a OnePlus
-device (Snapdragon 8-class, Android 16) that:
+`mahajanmohit/sruti` is an empty repo. The goal is a native Android app for a
+modern arm64 Android device that:
 
 1. Pulls models **from GitHub / Hugging Face in safetensors form** and runs them locally
    — not just pre-baked `.task`/`.litertlm` bundles the way Google AI Edge Gallery does.
@@ -30,7 +30,7 @@ stated, need reshaping before they become an engineering plan.
 
 ### ✅ What is straightforwardly true
 
-- A **1–2B model at Q4 is comfortable** on a modern OnePlus. Weights land around
+- A **1–2B model at Q4 is comfortable** on a modern arm64 phone. Weights land around
   0.7–1.3 GB plus KV cache; on 12–16 GB devices RAM is not the binding constraint.
 - Published figures put **Llama 3.2 3B at ~10 tok/s** and **Llama 3.1 8B at ~5 tok/s on
   the Hexagon NPU** on Snapdragon 8 Elite. A 1–2B model at Q4 should land well above that
@@ -156,7 +156,7 @@ Everything downstream is dead if this fails, so it comes first.
 
 1. Bare app + llama.cpp submodule + CMake NDK build, `arm64-v8a` only.
 2. JNI bridge: load GGUF → tokenize → decode loop → stream tokens to Kotlin.
-3. Sideload a known-good Q4_K_M 1–2B GGUF and **measure on the actual OnePlus**: prefill
+3. Sideload a known-good Q4_K_M 1–2B GGUF and **measure on the actual target device**: prefill
    tok/s, decode tok/s, peak RSS, sustained rate and temperature over 10 minutes, battery
    drain per 1k tokens.
 4. Publish results in `docs/benchmarks.md`.
@@ -229,7 +229,7 @@ Budgeted as real work, not polish-at-the-end.
 
 ## Verification
 
-- **Phase 0 gate:** measured tok/s, RSS and thermal curve on the target OnePlus, written to
+- **Phase 0 gate:** measured tok/s, RSS and thermal curve on the target device, written to
   `docs/benchmarks.md`. Everything downstream depends on these being real numbers.
 - **Converter correctness:** convert a model on-device, and separately with desktop
   `convert_hf_to_gguf.py`; assert tensor-level equivalence and compare perplexity on a

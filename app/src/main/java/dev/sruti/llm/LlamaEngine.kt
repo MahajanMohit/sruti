@@ -183,8 +183,11 @@ class LlamaEngine private constructor(
             nGpuLayers: Int = 0,
         ): LlamaEngine = withContext(dispatcher) {
             require(modelFile.isFile) { "model not found: ${modelFile.absolutePath}" }
-
-            LlamaBridge.nativeBackendInit()
+            // Backends are registered once at application start. Failing here with
+            // a clear reason beats llama.cpp's opaque "no backends are loaded".
+            check(NativeBackends.isUsable()) {
+                "no compute backend is available on this device"
+            }
 
             val model = LlamaBridge.nativeLoadModel(modelFile.absolutePath, nGpuLayers)
             check(model != 0L) { "failed to load model: ${modelFile.absolutePath}" }

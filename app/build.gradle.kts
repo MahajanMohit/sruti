@@ -21,10 +21,19 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Phase 0 targets a single OnePlus device. Shipping one ABI keeps the APK
-        // small and the native build fast; add more only when there is a reason to.
+        // arm64 covers every Android device this can usefully run on. CPU feature
+        // selection within arm64 is ggml's job at runtime, not a build-time
+        // assumption — see the note in src/main/cpp/CMakeLists.txt.
+        //
+        // Override for emulator testing:
+        //   ./gradlew :app:assembleDebug -Psruti.abis=arm64-v8a,x86_64
         ndk {
-            abiFilters += "arm64-v8a"
+            val requested = (project.findProperty("sruti.abis") as String?)
+                ?.split(',')
+                ?.map(String::trim)
+                ?.filter(String::isNotEmpty)
+                ?: listOf("arm64-v8a")
+            abiFilters += requested
         }
 
         externalNativeBuild {

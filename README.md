@@ -32,8 +32,9 @@ about it.
 
 ## Requirements
 
-- A device on **Android 12 (API 31) or newer**, arm64. Primary target is a OnePlus
-  on Android 16, Snapdragon 8-class.
+- A device on **Android 12 (API 31) or newer**, arm64. No particular chip is
+  assumed: ggml's CPU backend variants are all shipped and the best one the
+  device can execute is chosen at runtime.
 - **JDK 17+** and the Android SDK with **NDK 27.2.12479018** and CMake 3.22.1.
 - Roughly 4 GB of free disk for the build (llama.cpp objects are not small).
 
@@ -55,8 +56,24 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 The first build compiles llama.cpp from source and takes several minutes.
 Subsequent builds are incremental.
 
-Only `arm64-v8a` is built. Every target device has it, and dropping the other ABIs
-keeps both the APK and the native build time down.
+Only `arm64-v8a` is built, since every device this can usefully run on has it.
+Add another for emulator testing:
+
+```bash
+./gradlew :app:assembleDebug -Psruti.abis=arm64-v8a,x86_64
+```
+
+**No CPU features are assumed within arm64.** ggml ships a backend per ARM feature
+set — armv8.0 through armv9.2 — and the registry scores them against what the
+device actually reports, keeping the best one it can execute. Compiling for a
+specific chip instead would be faster to build and would SIGILL on anything older;
+this way one APK runs on a budget part and still uses dot-product and int8 matmul
+on a flagship.
+
+That discovery needs the APK's library directory passed to it explicitly. ggml's
+own defaults scan the executable's directory and the working directory, which on
+Android are `/system/bin` and `/` — so without it, *no* backend registers and
+nothing runs.
 
 ## Running the Phase 0 gate
 
@@ -161,7 +178,7 @@ broken app, a labelled one reads as a hot phone.
 
 The native tests cover UTF-8 reassembly across token boundaries, safetensors
 parsing, architecture mapping, the RoPE permutation and vocabulary conversion —
-301 assertions, no device needed.
+318 assertions, no device needed.
 
 Two of these matter more than they sound. A llama.cpp token piece is a byte
 string, and multi-byte characters routinely straddle two tokens, so naive
