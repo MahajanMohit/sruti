@@ -1,0 +1,213 @@
+name: Release
+
+# Tag-driven. `git tag v0.2.0 && git push origin v0.2.0` is the whole release
+# procedure; the tag is the single source of the version, so the tag, the APK's
+# versionName and what the in-app update check compares against cannot disagree.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. v0.2.0"
+        required: true
+      publish:
+        description: "Create the GitHub Release (otherwise build only)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NDK_VERSION: 27.2.12479018
+
+jobs:
+  # A release that fails its own test suite is worse than no release, because it
+  # is the build people will install and keep.
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Native tests
+        run: bash tools/run_native_tests.sh
+
+      - name: Kotlin unit tests
+        run: ./gradlew :app:testDebugUnitTest
+
+  release:
+    name: Build and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      # Needed to create the release and upload its assets.
+      contents: write
+    env:
+      # Job level: the `secrets` context is not valid in a step-level `if`.
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+
+          # Checked here rather than discovered by the Gradle version parser
+          # silently falling back to 0.1.0 and shipping a mislabelled APK.
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$TAG' is not a semver tag like v0.2.0"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if echo "$VERSION" | grep -q -- '-'; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A release APK has to be installable, and an unsigned one is not. Failing
+      # here with the reason beats publishing an artifact nobody can use.
+      - name: Require a signing key
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::KEYSTORE_BASE64 is not set. See docs/releasing.md for how to create the keystore and add the four secrets."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install NDK
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;${NDK_VERSION}" "cmake;3.22.1" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Cache native build
+        uses: actions/cache@v4
+        with:
+          path: app/.cxx
+          key: cxx-release-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ hashFiles('app/src/main/cpp/**', 'native/llama.cpp/CMakeLists.txt') }}
+          restore-keys: |
+            cxx-release-${{ runner.os }}-${{ env.NDK_VERSION }}-
+
+      # Outside the repository so a stray `git add -A` cannot commit it.
+      - name: Decode keystore
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          if [ ! -s "$RUNNER_TEMP/release.jks" ]; then
+            echo "::error::keystore decoded to an empty file -- is KEYSTORE_BASE64 a single line?"
+            exit 1
+          fi
+
+      - name: Build release APK
+        env:
+          SRUTI_KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          SRUTI_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SRUTI_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SRUTI_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease -Psruti.version=${{ steps.version.outputs.version }}
+
+      # Named by version and ABI so a downloaded file is still identifiable a
+      # year later, sitting in a downloads folder next to five others.
+      - name: Stage artifacts
+        id: artifacts
+        run: |
+          mkdir -p dist
+          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          NAME="sruti-${{ steps.version.outputs.version }}-arm64-v8a.apk"
+          cp "$APK" "dist/$NAME"
+          ( cd dist && sha256sum "$NAME" > "$NAME.sha256" )
+
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "size=$(du -h "dist/$NAME" | cut -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(cut -d' ' -f1 < "dist/$NAME.sha256")" >> "$GITHUB_OUTPUT"
+
+      # The same check the branch build does. A release missing a ggml variant
+      # installs fine and then reports "no compute backend is available".
+      - name: Verify native libraries are packaged
+        run: |
+          APK="dist/${{ steps.artifacts.outputs.name }}"
+          for lib in libsruti_llm.so libllama.so libggml.so libggml-base.so; do
+            unzip -l "$APK" | grep -q "$lib" || { echo "::error::missing $lib"; exit 1; }
+          done
+          variants=$(unzip -l "$APK" | grep -c 'libggml-cpu-android' || true)
+          [ "$variants" -ge 5 ] || { echo "::error::only $variants ggml CPU variants packaged"; exit 1; }
+
+      - name: Verify the APK is signed
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --verbose "dist/${{ steps.artifacts.outputs.name }}"
+
+      - name: Write release notes
+        run: |
+          cat > dist/notes.md <<'HEADER'
+          Sideloaded build — install by opening the APK and allowing installs from
+          your browser or file manager when prompted.
+
+          Requires Android 12 or newer, on a 64-bit ARM device.
+          HEADER
+
+          {
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| File | \`${{ steps.artifacts.outputs.name }}\` |"
+            echo "| Size | ${{ steps.artifacts.outputs.size }} |"
+            echo "| SHA-256 | \`${{ steps.artifacts.outputs.sha }}\` |"
+            echo ""
+          } >> dist/notes.md
+
+          PREVIOUS=$(git describe --tags --abbrev=0 "${{ steps.version.outputs.tag }}^" 2>/dev/null || true)
+          if [ -n "$PREVIOUS" ]; then
+            echo "## Changes since $PREVIOUS" >> dist/notes.md
+            echo "" >> dist/notes.md
+            git log --no-merges --pretty='- %s' "$PREVIOUS..${{ steps.version.outputs.tag }}" >> dist/notes.md
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sruti-${{ steps.version.outputs.version }}
+          path: dist/*
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: github.event_name == 'push' || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "Sruti ${{ steps.version.outputs.version }}" \
+            --notes-file dist/notes.md \
+            ${{ steps.version.outputs.prerelease == 'true' && '--prerelease' || '' }} \
+            "dist/${{ steps.artifacts.outputs.name }}" \
+            "dist/${{ steps.artifacts.outputs.name }}.sha256"

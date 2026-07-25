@@ -18,6 +18,7 @@ import dev.sruti.hub.CheckpointDownloader
 import dev.sruti.hub.HuggingFaceApi
 import dev.sruti.hub.ModelStore
 import dev.sruti.settings.SettingsStore
+import dev.sruti.update.UpdateChecker
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import okhttp3.OkHttpClient
@@ -137,4 +138,11 @@ object AppModule {
         client: OkHttpClient,
         @IoDispatcher dispatcher: CoroutineDispatcher,
     ): SkillStore = SkillStore(context, client, dispatcher)
+
+    @Provides
+    @Singleton
+    fun provideUpdateChecker(
+        client: OkHttpClient,
+        @IoDispatcher dispatcher: CoroutineDispatcher,
+    ): UpdateChecker = UpdateChecker(client, dispatcher)
 }

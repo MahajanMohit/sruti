@@ -38,6 +38,8 @@ data class LibraryUiState(
     val tokenSet: Boolean = false,
     val keepCheckpoints: Boolean = false,
     val shellEnabled: Boolean = false,
+    val updateStatus: dev.sruti.update.UpdateStatus? = null,
+    val checkingUpdate: Boolean = false,
     val termuxInstalled: Boolean = false,
     val termuxPermitted: Boolean = false,
     val isLoading: Boolean = true,
@@ -69,6 +71,7 @@ class LibraryViewModel @Inject constructor(
     private val api: HuggingFaceApi,
     private val settings: SettingsStore,
     private val termux: dev.sruti.agent.TermuxTool,
+    private val updates: dev.sruti.update.UpdateChecker,
 ) : AndroidViewModel(application) {
 
     private val _library = MutableStateFlow(LibraryUiState())
@@ -269,6 +272,21 @@ class LibraryViewModel @Inject constructor(
                 termuxInstalled = termux.isTermuxInstalled(),
                 termuxPermitted = termux.hasPermission(),
             )
+        }
+    }
+
+    /**
+     * Asks GitHub whether a newer build exists.
+     *
+     * Only when the user asks. This app is sideloaded, so nothing else would tell
+     * them — but polling in the background would be a network call they did not
+     * request, in an app that promises not to make those.
+     */
+    fun checkForUpdate() {
+        viewModelScope.launch {
+            _library.update { it.copy(checkingUpdate = true, updateStatus = null) }
+            val status = updates.check()
+            _library.update { it.copy(checkingUpdate = false, updateStatus = status) }
         }
     }
 

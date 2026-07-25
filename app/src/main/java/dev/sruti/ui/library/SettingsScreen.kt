@@ -50,6 +50,11 @@ fun SettingsScreen(
     termuxPermitted: Boolean,
     onSetShellEnabled: (Boolean) -> Unit,
     onRequestTermuxPermission: () -> Unit,
+    versionName: String,
+    updateStatus: dev.sruti.update.UpdateStatus?,
+    checkingUpdate: Boolean,
+    onCheckForUpdate: () -> Unit,
+    onOpenUrl: (String) -> Unit,
     onRunBenchmark: () -> Unit,
     onOpenAbout: () -> Unit,
     onOpenSkills: () -> Unit,
@@ -262,6 +267,57 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             TextButton(onClick = onOpenAbout) { Text("How Sruti works") }
+
+            Text(
+                text = "Updates",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Text(
+                // Sideloaded, so nothing else will mention it.
+                text = "Version $versionName. This app is installed outside the Play Store, " +
+                    "so it will not update itself.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            when (val status = updateStatus) {
+                is dev.sruti.update.UpdateStatus.Available -> {
+                    Text(
+                        text = "Version ${status.version} is available.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    if (status.notes.isNotBlank()) {
+                        Text(
+                            text = status.notes,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = { onOpenUrl(status.pageUrl) }) {
+                        Text("Open the release page")
+                    }
+                }
+
+                is dev.sruti.update.UpdateStatus.UpToDate -> Text(
+                    text = "This is the newest release.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                is dev.sruti.update.UpdateStatus.Failed -> Text(
+                    text = status.message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+
+                null -> Unit
+            }
+
+            TextButton(onClick = onCheckForUpdate, enabled = !checkingUpdate) {
+                Text(if (checkingUpdate) "Checking…" else "Check for updates")
+            }
 
             Text(
                 text = "Diagnostics",

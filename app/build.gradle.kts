@@ -9,6 +9,40 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+/**
+ * The version being built.
+ *
+ * Taken from the tag at release time (`-Psruti.version=v0.2.0`) so the tag, the
+ * APK and the in-app update check can never disagree — a version bumped by hand
+ * in this file is one that eventually gets forgotten.
+ */
+data class ReleaseVersion(val name: String, val code: Int)
+
+val releaseVersion: ReleaseVersion = run {
+    val raw = (project.findProperty("sruti.version") as String?)
+        ?.trim()
+        ?.removePrefix("v")
+        ?.takeIf { it.isNotBlank() }
+        ?: "0.1.0"
+
+    // Monotonic across semver: 1.2.3 -> 10203. Two digits per component is
+    // plenty and keeps the number readable when a device reports it.
+    val parts = raw.substringBefore('-').split('.').mapNotNull { it.toIntOrNull() }
+    val code = when (parts.size) {
+        3 -> parts[0] * 10_000 + parts[1] * 100 + parts[2]
+        2 -> parts[0] * 10_000 + parts[1] * 100
+        1 -> parts[0] * 10_000
+        else -> 1
+    }.coerceAtLeast(1)
+
+    ReleaseVersion(raw, code)
+}
+
+/** Which repository the in-app update check asks. Overridable for forks. */
+val releasesRepo: String =
+    (project.findProperty("sruti.releasesRepo") as String?)?.takeIf { it.isNotBlank() }
+        ?: "MahajanMohit/sruti"
+
 android {
     namespace = "dev.sruti"
     compileSdk = 36
@@ -18,8 +52,12 @@ android {
         applicationId = "dev.sruti"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersion.code
+        versionName = releaseVersion.name
+
+        // The update check needs to know which repository to ask, and a fork
+        // should check its own releases rather than this one.
+        buildConfigField("String", "RELEASES_REPO", "\"$releasesRepo\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
