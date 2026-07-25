@@ -81,6 +81,29 @@ object GbnfGrammar {
         return builder.toString()
     }
 
+    /**
+     * A JSON object holding exactly a skill's parameters, all strings.
+     *
+     * Reuses the same machinery as [toolCall] by expressing the skill's
+     * parameters as tool parameters: a slot is always free text, because a skill
+     * author writes descriptions, not types.
+     */
+    fun slots(parameters: List<SkillParameter>): String = toolCall(
+        Tool(
+            name = "slots",
+            description = "",
+            parameters = parameters.map {
+                ToolParameter(
+                    name = it.name,
+                    type = ToolParameter.Type.String,
+                    description = it.description,
+                    required = it.required,
+                )
+            },
+            execute = { ToolResult.Success("") },
+        ),
+    )
+
     /** `"key" ws ":" ws <value>` for one parameter. */
     private fun entry(
         parameter: ToolParameter,

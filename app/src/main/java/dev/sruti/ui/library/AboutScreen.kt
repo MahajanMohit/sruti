@@ -161,6 +161,12 @@ fun AboutScreen(
                 "Anything that changes something asks first, and shows the exact " +
                     "arguments it would use. Shell access is off until you turn it on.",
             )
+            Body(
+                "Skills go further. A skill writes the steps down — which tools, in " +
+                    "what order, and where each result goes — so the model is asked only " +
+                    "to read the values out of your request, which is the part it does " +
+                    "well. Four ship with the app, and you can write or import your own.",
+            )
 
             Divider()
             Section("Limits worth knowing")

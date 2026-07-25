@@ -14,7 +14,10 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -37,6 +40,9 @@ import dev.sruti.ui.library.AboutScreen
 import dev.sruti.ui.library.ModelDetailScreen
 import dev.sruti.ui.library.SettingsScreen
 import dev.sruti.ui.phase0.Phase0Screen
+import dev.sruti.ui.skills.SkillEditorScreen
+import dev.sruti.ui.skills.SkillsScreen
+import dev.sruti.ui.skills.SkillsViewModel
 import dev.sruti.llm.DeviceCapabilities
 import dev.sruti.llm.NativeBackends
 import dev.sruti.ui.theme.Haptic
@@ -51,6 +57,8 @@ private object Routes {
     const val SETTINGS = "settings"
     const val BENCHMARK = "benchmark"
     const val ABOUT = "about"
+    const val SKILLS = "skills"
+    const val SKILL_EDITOR = "skill_editor"
 
     /** The model's absolute path, encoded — it contains slashes. */
     const val MODEL_DETAIL = "model/{path}"
@@ -221,6 +229,7 @@ fun SrutiApp() {
                     onRequestTermuxPermission = { requestTermuxPermission(context) },
                     onRunBenchmark = { navController.navigate(Routes.BENCHMARK) },
                     onOpenAbout = { navController.navigate(Routes.ABOUT) },
+                    onOpenSkills = { navController.navigate(Routes.SKILLS) },
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -245,6 +254,52 @@ fun SrutiApp() {
                         onBack = { navController.popBackStack() },
                     )
                 }
+            }
+
+            composable(Routes.SKILLS) {
+                val viewModel: SkillsViewModel = hiltViewModel()
+                val skills by viewModel.state.collectAsStateWithLifecycle()
+
+                // The picker is registered here rather than in the screen so the
+                // screen stays a pure function of its state.
+                val picker = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument(),
+                ) { uri -> uri?.let(viewModel::importFrom) }
+
+                SkillsScreen(
+                    state = skills,
+                    missingTools = viewModel::missingTools,
+                    onNew = {
+                        viewModel.startNew()
+                        navController.navigate(Routes.SKILL_EDITOR)
+                    },
+                    onEdit = { skill ->
+                        viewModel.startEditing(skill)
+                        navController.navigate(Routes.SKILL_EDITOR)
+                    },
+                    onDelete = viewModel::delete,
+                    // Skills are markdown, but a file manager will not always
+                    // label them as such, so plain text is accepted too.
+                    onImportFile = { picker.launch(arrayOf("text/markdown", "text/plain", "*/*")) },
+                    onImportUrl = viewModel::importFrom,
+                    onDismissError = viewModel::clearError,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+
+            composable(Routes.SKILL_EDITOR) { entry ->
+                // Scoped to the skills route so the editor shares its view model
+                // and the text being edited survives the navigation.
+                val parent = remember(entry) { navController.getBackStackEntry(Routes.SKILLS) }
+                val viewModel: SkillsViewModel = hiltViewModel(parent)
+                val editor by viewModel.editor.collectAsStateWithLifecycle()
+
+                SkillEditorScreen(
+                    state = editor,
+                    onTextChanged = viewModel::onEditorTextChanged,
+                    onSave = viewModel::save,
+                    onBack = { navController.popBackStack() },
+                )
             }
 
             composable(Routes.BENCHMARK) {

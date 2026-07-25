@@ -9,6 +9,7 @@ import dagger.hilt.components.SingletonComponent
 import androidx.room.Room
 import dev.sruti.agent.BuiltinTools
 import dev.sruti.agent.TermuxTool
+import dev.sruti.agent.SkillStore
 import dev.sruti.agent.ToolRegistry
 import dev.sruti.convert.ModelConverter
 import dev.sruti.data.ChatDao
@@ -128,4 +129,12 @@ object AppModule {
         builtins: BuiltinTools,
         termux: TermuxTool,
     ): ToolRegistry = ToolRegistry(builtins.all() + termux.tool())
+
+    @Provides
+    @Singleton
+    fun provideSkillStore(
+        @ApplicationContext context: Context,
+        client: OkHttpClient,
+        @IoDispatcher dispatcher: CoroutineDispatcher,
+    ): SkillStore = SkillStore(context, client, dispatcher)
 }

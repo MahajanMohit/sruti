@@ -119,6 +119,7 @@ class ChatViewModel @Inject constructor(
     private val settings: dev.sruti.settings.SettingsStore,
     private val tools: dev.sruti.agent.ToolRegistry,
     private val termux: dev.sruti.agent.TermuxTool,
+    private val skills: dev.sruti.agent.SkillStore,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -464,30 +465,49 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(trace = it.trace + TraceLine(text, kind)) }
         }
 
-        val executor = dev.sruti.agent.AgentExecutor(active, tools)
+        // A matching skill takes precedence, because it removes the step the model
+        // is worst at: a skill states which tools to run and in what order, so the
+        // model is only asked to read values out of the request.
+        val skill = dev.sruti.agent.SkillMatcher.match(request, skills.all())
+        if (skill != null) {
+            trace("Using skill: ${skill.name}", TraceLine.Kind.Tool)
+        }
+
+        val confirmHandler: dev.sruti.agent.ConfirmationRequest = { tool, arguments ->
+            // Suspends here until the dialog is answered. Anything that changes
+            // state on the device is the user's decision, not the model's — that
+            // is the whole point of the tier system.
+            val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+            confirmation = deferred
+            _uiState.update {
+                it.copy(
+                    pendingConfirmation = PendingConfirmation(
+                        toolName = tool.name,
+                        description = tool.description,
+                        arguments = arguments,
+                    ),
+                )
+            }
+            deferred.await()
+        }
+
+        // A skill with steps runs deterministically; one without is guidance, and
+        // guidance is worth more prepended to the ordinary loop than run as an
+        // empty sequence.
+        val events = when {
+            skill != null && skill.isTemplated ->
+                dev.sruti.agent.SkillRunner(active, tools)
+                    .run(skill, request, tiers, confirmHandler)
+
+            else -> dev.sruti.agent.AgentExecutor(active, tools).run(
+                request = if (skill != null) "${skill.body}\n\n$request" else request,
+                allowedTiers = tiers,
+                confirm = confirmHandler,
+            )
+        }
 
         runCatching {
-            executor.run(
-                request = request,
-                allowedTiers = tiers,
-                confirm = { tool, arguments ->
-                    // Suspends here until the dialog is answered. Anything that
-                    // changes state on the device is the user's decision, not the
-                    // model's — that is the whole point of the tier system.
-                    val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
-                    confirmation = deferred
-                    _uiState.update {
-                        it.copy(
-                            pendingConfirmation = PendingConfirmation(
-                                toolName = tool.name,
-                                description = tool.description,
-                                arguments = arguments,
-                            ),
-                        )
-                    }
-                    deferred.await()
-                },
-            ).collect { event ->
+            events.collect { event ->
                 when (event) {
                     is dev.sruti.agent.AgentEvent.StepStarted ->
                         trace("Step ${event.step} of ${event.maxSteps}", TraceLine.Kind.Step)

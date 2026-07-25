@@ -52,6 +52,7 @@ fun SettingsScreen(
     onRequestTermuxPermission: () -> Unit,
     onRunBenchmark: () -> Unit,
     onOpenAbout: () -> Unit,
+    onOpenSkills: () -> Unit,
     onBack: () -> Unit,
 ) {
     var token by remember { mutableStateOf("") }
@@ -206,6 +207,14 @@ fun SettingsScreen(
                 }
                 Switch(checked = shellEnabled, onCheckedChange = onSetShellEnabled)
             }
+
+            Text(
+                text = "Skills write down the steps for a task so the model only has to " +
+                    "fill in the values. Import them, or write your own.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = onOpenSkills) { Text("Manage skills") }
 
             // Only once the user has asked for it: naming a prerequisite for
             // something they have not enabled is noise.
