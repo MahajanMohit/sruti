@@ -56,6 +56,8 @@ internal object ChatBridge {
         repeatPenalty: Float,
         repeatLastN: Int,
         seed: Int,
+        /** GBNF source, or empty for unconstrained decoding. */
+        grammar: String,
         callback: ChatCallback,
     ): LongArray
 }

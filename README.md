@@ -10,9 +10,9 @@ anywhere in the pipeline.
 Inference is **strictly local**. No prompt, no completion, and no telemetry is ever
 sent to a remote model.
 
-> **Status: Phase 2.** Browse, download, convert and chat all work. The converter
-> produces output byte-identical to llama.cpp's own. The agent harness is not
-> built yet. See [the roadmap](#roadmap).
+> **Status: Phase 3.** Browse, download, convert, chat, and a grammar-constrained
+> agent harness. The converter produces output byte-identical to llama.cpp's own.
+> Nothing has yet run on a physical device. See [the roadmap](#roadmap).
 
 ---
 
@@ -169,6 +169,22 @@ abruptly part-way through a reply. Backing off earlier and more gently keeps the
 pace even, and the reason is shown on screen — an unexplained crawl reads as a
 broken app, a labelled one reads as a hot phone.
 
+## The agent
+
+A 1–2B model cannot hold a multi-step plan, so the harness does not ask it to.
+Intelligence lives in the code; the model answers one narrow question at a time.
+
+Every tool call is constrained by a GBNF grammar generated from the tool's schema,
+which makes a malformed call *unreachable* rather than merely unlikely. What a
+grammar cannot do is make a choice correct — measured on Qwen2.5-0.5B, tool
+selection is wrong while argument extraction is right. So selection is narrowed by
+retrieval before the model sees it, arguments are validated deterministically
+afterwards, and anything that mutates state is confirmed.
+
+Shell access via Termux is the largest capability jump available without root, and
+is off until explicitly enabled. Details, measurements and the reasoning are in
+[`docs/agent.md`](docs/agent.md).
+
 ## Testing
 
 ```bash
@@ -254,7 +270,7 @@ tracks: RSS is what makes the low-memory killer take an interest.
 | 0 | JNI bridge, decode loop, benchmark harness | code complete, **awaiting on-device numbers** |
 | 1 | Model acquisition + on-device safetensors → GGUF conversion | **complete** — browse, download, convert, manage |
 | 2 | Chat: KV-cache reuse, context management, thermal governor | **complete** |
-| 3 | Agent harness: grammar-constrained tool calls, Termux shell | not started |
+| 3 | Agent harness: grammar-constrained tool calls, Termux shell | **complete** |
 | 4 | Refinement: motion, haptics, 120 Hz, jank budget in CI | not started |
 | 5 | Signed release via GitHub Releases | not started |
 

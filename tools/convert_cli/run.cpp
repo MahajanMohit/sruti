@@ -80,8 +80,30 @@ int main(int argc, char ** argv) {
     const int n_predict = argc > 3 ? std::atoi(argv[3]) : 48;
 
     bool chat_mode = false;
+    std::string grammar_path;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--chat") == 0) chat_mode = true;
+        if (std::strcmp(argv[i], "--chat") == 0) {
+            chat_mode = true;
+        } else if (std::strcmp(argv[i], "--grammar") == 0 && i + 1 < argc) {
+            grammar_path = argv[++i];
+        }
+    }
+
+    // Reading the grammar before the model loads means a syntax error is reported
+    // in a second rather than after a multi-second load.
+    std::string grammar_text;
+    if (!grammar_path.empty()) {
+        FILE * gf = std::fopen(grammar_path.c_str(), "rb");
+        if (gf == nullptr) {
+            std::fprintf(stderr, "cannot open grammar %s\n", grammar_path.c_str());
+            return 1;
+        }
+        char buf[4096];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof(buf), gf)) > 0) {
+            grammar_text.append(buf, n);
+        }
+        std::fclose(gf);
     }
 
     llama_log_set(quiet_log, nullptr);
@@ -139,6 +161,21 @@ int main(int argc, char ** argv) {
     std::fflush(stdout);
 
     llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+
+    if (!grammar_text.empty()) {
+        // Must precede the selection sampler: the grammar masks tokens that would
+        // break the structure, and the sampler then chooses among what is left.
+        llama_sampler * grammar =
+            llama_sampler_init_grammar(vocab, grammar_text.c_str(), "root");
+        if (grammar == nullptr) {
+            std::fprintf(stderr, "error: grammar failed to parse\n");
+            llama_sampler_free(smpl);
+            return 1;
+        }
+        llama_sampler_chain_add(smpl, grammar);
+        std::printf("grammar: %s (parsed)\n", grammar_path.c_str());
+    }
+
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
     llama_batch batch = llama_batch_get_one(tokens.data(), n_prompt);
@@ -153,7 +190,9 @@ int main(int argc, char ** argv) {
             std::printf(" [end-of-generation]");
             break;
         }
-        llama_sampler_accept(smpl, id);
+        // No explicit accept: llama_sampler_sample already accepted this token
+        // into the chain. Accepting again advances stateful samplers twice --
+        // which crashes a grammar and silently double-counts repetitions.
 
         const std::string piece = piece_for(vocab, id);
         std::fwrite(piece.data(), 1, piece.size(), stdout);

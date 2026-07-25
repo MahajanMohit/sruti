@@ -149,6 +149,14 @@ class ChatSession internal constructor(
         messages: List<ChatMessage>,
         params: ChatParams = ChatParams(),
         systemPromptTokens: Int = 0,
+        /**
+         * GBNF source constraining what may be emitted, or null for free text.
+         *
+         * With one supplied, output that would break the structure is not merely
+         * unlikely — it is unreachable, because the offending tokens are masked
+         * during sampling.
+         */
+        grammar: String? = null,
     ): Flow<ChatEvent> = channelFlow {
         check(!closed.get()) { "session is closed" }
 
@@ -178,6 +186,7 @@ class ChatSession internal constructor(
             repeatPenalty = params.repeatPenalty,
             repeatLastN = params.repeatLastN,
             seed = if (params.seed >= 0) params.seed else System.nanoTime().toInt(),
+            grammar = grammar.orEmpty(),
             callback = callback,
         )
 

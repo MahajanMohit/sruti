@@ -220,7 +220,7 @@ Java_dev_sruti_llm_ChatBridge_nativeGenerate(
     jintArray tokens, jint n_keep, jint max_tokens,
     jfloat temperature, jint top_k, jfloat top_p, jfloat min_p,
     jfloat repeat_penalty, jint repeat_last_n, jint seed,
-    jobject callback) {
+    jstring grammar, jobject callback) {
 
     if (model_handle == 0 || ctx_handle == 0 || session_handle == 0) {
         throw_illegal_state(env, "null model, context or session handle");
@@ -318,6 +318,21 @@ Java_dev_sruti_llm_ChatBridge_nativeGenerate(
     sparams.no_perf = false;
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
 
+    // The grammar goes first so it masks structurally invalid tokens before any
+    // other sampler gets to choose. Placed after temperature or top-k, those
+    // samplers could discard every token the grammar would have allowed.
+    const std::string grammar_text = jstring_to_utf8(env, grammar);
+    if (!grammar_text.empty()) {
+        llama_sampler * gbnf =
+            llama_sampler_init_grammar(vocab, grammar_text.c_str(), "root");
+        if (gbnf == nullptr) {
+            llama_sampler_free(smpl);
+            throw_illegal_state(env, "grammar failed to parse");
+            return nullptr;
+        }
+        llama_sampler_chain_add(smpl, gbnf);
+    }
+
     if (repeat_penalty > 1.0f && repeat_last_n > 0) {
         llama_sampler_chain_add(
             smpl, llama_sampler_init_penalties(repeat_last_n, repeat_penalty, 0.0f, 0.0f));
@@ -352,7 +367,10 @@ Java_dev_sruti_llm_ChatBridge_nativeGenerate(
             break;
         }
 
-        llama_sampler_accept(smpl, id);
+        // llama_sampler_sample already accepted this token into the chain.
+        // Accepting again advances every stateful sampler twice: the repetition
+        // penalty would see each token as two occurrences, and a grammar's stack
+        // would run empty and abort.
         ++n_generated;
         session->cached.push_back(id);
 

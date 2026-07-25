@@ -10,6 +10,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+      Shell access via Termux, off until the user explicitly enables it. Termux
+      also needs allow-external-apps=true in its own termux.properties, which no
+      permission here can grant.
+    -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+
+    <queries>
+        <package android:name="com.termux" />
+    </queries>
+
     <application
         android:name=".SrutiApplication"
         android:allowBackup="false"

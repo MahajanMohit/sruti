@@ -383,7 +383,8 @@ Java_dev_sruti_llm_LlamaBridge_nativeGenerate(
             break;
         }
 
-        llama_sampler_accept(smpl, id);
+        // llama_sampler_sample has already accepted this token into the chain.
+        // A second accept advances stateful samplers twice over.
         ++n_generated;
 
         const std::string piece = piece_for_token(vocab, id);
