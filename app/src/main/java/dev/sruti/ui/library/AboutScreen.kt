@@ -134,6 +134,35 @@ fun AboutScreen(
             )
 
             Divider()
+            Section("Agent mode")
+            Body(
+                "Turned on from the chat screen, a message becomes a task rather " +
+                    "than a question. The model can read and write files in its own " +
+                    "workspace, fetch a URL, use the clipboard, and — if you enable " +
+                    "it — run shell commands through Termux.",
+            )
+            Body(
+                "The model is never asked to plan. It is asked one narrow question at " +
+                    "a time: which of these few tools, then fill these slots. The loop " +
+                    "between those questions is ordinary code with a hard step limit. " +
+                    "A model this size cannot hold a multi-step plan, but it can answer " +
+                    "a narrow question, and the harness is what remembers.",
+            )
+            Body(
+                "Answers are constrained by a grammar while they are being generated, " +
+                    "so a malformed tool call is impossible rather than merely " +
+                    "unlikely. That does not make a call correct — measured on a 0.5B " +
+                    "model, argument extraction was reliable and tool selection was " +
+                    "not — which is why candidates are narrowed before the model sees " +
+                    "them, arguments are checked against the schema afterwards, and " +
+                    "every step is shown as it happens.",
+            )
+            Body(
+                "Anything that changes something asks first, and shows the exact " +
+                    "arguments it would use. Shell access is off until you turn it on.",
+            )
+
+            Divider()
             Section("Limits worth knowing")
             Body(
                 "Models above roughly 4 billion parameters will run but not pleasantly. " +

@@ -49,6 +49,8 @@ import dev.sruti.hub.InstalledModel
 import dev.sruti.hub.StagedCheckpoint
 import dev.sruti.ui.formatBytes
 import dev.sruti.ui.formatParameters
+import dev.sruti.ui.theme.Haptic
+import dev.sruti.ui.theme.LocalHaptics
 import dev.sruti.ui.theme.Motion
 import dev.sruti.work.ModelJobState
 
@@ -243,6 +245,7 @@ private fun InstalledModelCard(
     onDelete: () -> Unit,
     onOpen: () -> Unit,
 ) {
+    val haptics = LocalHaptics.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -275,7 +278,12 @@ private fun InstalledModelCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        IconButton(onClick = onDelete) {
+        IconButton(
+            onClick = {
+                haptics.play(Haptic.Destructive)
+                onDelete()
+            },
+        ) {
             Icon(Icons.Outlined.Delete, contentDescription = "Delete model")
         }
     }

@@ -1,6 +1,7 @@
 package dev.sruti.ui.library
 
 import android.app.Application
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+@Immutable
 data class LibraryUiState(
     val installed: List<InstalledModel> = emptyList(),
     val staged: List<StagedCheckpoint> = emptyList(),
@@ -35,9 +37,13 @@ data class LibraryUiState(
     val job: ModelJobState = ModelJobState.Idle,
     val tokenSet: Boolean = false,
     val keepCheckpoints: Boolean = false,
+    val shellEnabled: Boolean = false,
+    val termuxInstalled: Boolean = false,
+    val termuxPermitted: Boolean = false,
     val isLoading: Boolean = true,
 )
 
+@Immutable
 data class BrowseUiState(
     val query: String = "",
     val filters: SearchFilters = SearchFilters(),
@@ -49,6 +55,7 @@ data class BrowseUiState(
     val inspected: Map<String, CheckpointInfo> = emptyMap(),
 )
 
+@Immutable
 data class ModelDetailUiState(
     val model: InstalledModel? = null,
     val facts: List<GgufFact> = emptyList(),
@@ -61,6 +68,7 @@ class LibraryViewModel @Inject constructor(
     private val store: ModelStore,
     private val api: HuggingFaceApi,
     private val settings: SettingsStore,
+    private val termux: dev.sruti.agent.TermuxTool,
 ) : AndroidViewModel(application) {
 
     private val _library = MutableStateFlow(LibraryUiState())
@@ -95,6 +103,12 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             settings.keepCheckpoints.collect { keep ->
                 _library.update { it.copy(keepCheckpoints = keep) }
+            }
+        }
+        viewModelScope.launch {
+            settings.shellEnabled.collect { enabled ->
+                _library.update { it.copy(shellEnabled = enabled) }
+                refreshTermuxStatus()
             }
         }
         refresh()
@@ -240,6 +254,26 @@ class LibraryViewModel @Inject constructor(
 
     fun setDefaultQuant(quantType: QuantType) {
         viewModelScope.launch { settings.setDefaultQuantType(quantType) }
+    }
+
+    /**
+     * Re-reads whether Termux is installed and has granted permission.
+     *
+     * Both can change while the app is running — the user leaves to install
+     * Termux, or answers the permission prompt — so this is called on entering
+     * the screen rather than cached at construction.
+     */
+    fun refreshTermuxStatus() {
+        _library.update {
+            it.copy(
+                termuxInstalled = termux.isTermuxInstalled(),
+                termuxPermitted = termux.hasPermission(),
+            )
+        }
+    }
+
+    fun setShellEnabled(enabled: Boolean) {
+        viewModelScope.launch { settings.setShellEnabled(enabled) }
     }
 
     fun setKeepCheckpoints(keep: Boolean) {

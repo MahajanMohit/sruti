@@ -45,6 +45,11 @@ fun SettingsScreen(
     onSetQuant: (QuantType) -> Unit,
     keepCheckpoints: Boolean,
     onSetKeepCheckpoints: (Boolean) -> Unit,
+    shellEnabled: Boolean,
+    termuxInstalled: Boolean,
+    termuxPermitted: Boolean,
+    onSetShellEnabled: (Boolean) -> Unit,
+    onRequestTermuxPermission: () -> Unit,
     onRunBenchmark: () -> Unit,
     onOpenAbout: () -> Unit,
     onBack: () -> Unit,
@@ -171,6 +176,69 @@ fun SettingsScreen(
                     )
                 }
                 Switch(checked = keepCheckpoints, onCheckedChange = onSetKeepCheckpoints)
+            }
+
+            Text(
+                text = "Agent",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onSetShellEnabled(!shellEnabled) }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Allow shell commands", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        // Said plainly rather than softened. This grants a language
+                        // model a real POSIX shell, and the user should decide that
+                        // knowing exactly what it means.
+                        text = "Lets the agent run commands through Termux — git, python, " +
+                            "coreutils. Every command is shown and confirmed before it runs.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = shellEnabled, onCheckedChange = onSetShellEnabled)
+            }
+
+            // Only once the user has asked for it: naming a prerequisite for
+            // something they have not enabled is noise.
+            if (shellEnabled) {
+                when {
+                    !termuxInstalled -> Text(
+                        text = "Termux is not installed. Install it from F-Droid or GitHub — " +
+                            "the Play Store build cannot accept commands from other apps.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+
+                    !termuxPermitted -> {
+                        Text(
+                            text = "Termux is installed but has not granted permission yet.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        TextButton(onClick = onRequestTermuxPermission) {
+                            Text("Grant Termux permission")
+                        }
+                    }
+
+                    else -> Text(
+                        // Not detectable from here, so it has to be stated rather
+                        // than checked: a command failing for this reason otherwise
+                        // looks like the model getting it wrong.
+                        text = "Termux is reachable. It must also have " +
+                            "allow-external-apps=true in ~/.termux/termux.properties.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Text(

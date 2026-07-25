@@ -52,6 +52,8 @@ import dev.sruti.hub.SearchFilters
 import dev.sruti.hub.SizeBand
 import dev.sruti.ui.formatBytes
 import dev.sruti.ui.formatParameters
+import dev.sruti.ui.theme.Haptic
+import dev.sruti.ui.theme.LocalHaptics
 import dev.sruti.ui.theme.Motion
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -199,6 +201,14 @@ private fun FilterBar(
     filters: SearchFilters,
     onFiltersChanged: (SearchFilters) -> Unit,
 ) {
+    val haptics = LocalHaptics.current
+    // Wraps every chip: a filter that narrows the list below deserves the same
+    // confirmation a physical switch gives, and repeating the call at four sites
+    // is how they end up drifting apart.
+    val apply: (SearchFilters) -> Unit = {
+        haptics.play(Haptic.Select)
+        onFiltersChanged(it)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -210,9 +220,7 @@ private fun FilterBar(
             FilterChip(
                 selected = selected,
                 onClick = {
-                    onFiltersChanged(
-                        filters.copy(format = if (selected) FormatFilter.ANY else format),
-                    )
+                    apply(filters.copy(format = if (selected) FormatFilter.ANY else format))
                 },
                 label = { Text(format.label) },
             )
@@ -222,14 +230,14 @@ private fun FilterBar(
             val selected = filters.size == band
             FilterChip(
                 selected = selected,
-                onClick = { onFiltersChanged(filters.copy(size = if (selected) null else band)) },
+                onClick = { apply(filters.copy(size = if (selected) null else band)) },
                 label = { Text(band.label) },
             )
         }
 
         FilterChip(
             selected = filters.hideGated,
-            onClick = { onFiltersChanged(filters.copy(hideGated = !filters.hideGated)) },
+            onClick = { apply(filters.copy(hideGated = !filters.hideGated)) },
             label = { Text("Open access") },
         )
 
@@ -237,9 +245,7 @@ private fun FilterBar(
             val selected = filters.family == family
             FilterChip(
                 selected = selected,
-                onClick = {
-                    onFiltersChanged(filters.copy(family = if (selected) null else family))
-                },
+                onClick = { apply(filters.copy(family = if (selected) null else family)) },
                 label = { Text(family) },
             )
         }

@@ -1,5 +1,6 @@
 package dev.sruti.hub
 
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -10,6 +11,9 @@ import okhttp3.Request
 import java.io.IOException
 
 /** A model as it appears in search results. */
+// JsonElement is immutable; the compiler cannot infer that across a module
+// boundary, so it is asserted here.
+@Immutable
 @Serializable
 data class RemoteModelSummary(
     @SerialName("id") val repoId: String,
@@ -56,10 +60,13 @@ data class RemoteModelSummary(
             return if (match.groupValues[2].lowercase() == "m") value / 1000.0 else value
         }
 
-    private companion object {
-        val SIZE_IN_NAME = Regex("""(?:^|[-_. ])(\d+(?:\.\d+)?)([bBmM])(?:$|[-_. ])""")
-    }
 }
+
+// Deliberately a file-level property rather than a companion member: a
+// @Serializable class's companion is where the generated serializer() lives, and
+// declaring one private makes it inaccessible to every call site that decodes the
+// class -- which fails at runtime, not at compile time.
+private val SIZE_IN_NAME = Regex("""(?:^|[-_. ])(\d+(?:\.\d+)?)([bBmM])(?:$|[-_. ])""")
 
 /** Size bands, chosen around what a phone can actually run. */
 enum class SizeBand(val label: String, val range: ClosedFloatingPointRange<Double>) {
@@ -290,8 +297,11 @@ class HuggingFaceApi(
                 append("&search=").append(query.urlEncoded())
             }
         }
-        return runCatching { json.decodeFromString<List<RemoteModelSummary>>(get(url)) }
-            .getOrDefault(emptyList())
+        // Deliberately not caught. Swallowing failures here turns a broken
+        // request -- a bad URL, an auth error, a decode fault -- into "no models
+        // matched that search", which is indistinguishable from an empty result
+        // set and impossible to diagnose from a screenshot.
+        return json.decodeFromString(get(url))
     }
 
     /** Web page for a repository, for accepting a licence. */

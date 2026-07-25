@@ -7,6 +7,9 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import androidx.room.Room
+import dev.sruti.agent.BuiltinTools
+import dev.sruti.agent.TermuxTool
+import dev.sruti.agent.ToolRegistry
 import dev.sruti.convert.ModelConverter
 import dev.sruti.data.ChatDao
 import dev.sruti.data.ChatDatabase
@@ -95,4 +98,34 @@ object AppModule {
 
     @Provides
     fun provideChatDao(database: ChatDatabase): ChatDao = database.chatDao()
+
+    @Provides
+    @Singleton
+    fun provideTermuxTool(
+        @ApplicationContext context: Context,
+        @IoDispatcher dispatcher: CoroutineDispatcher,
+    ): TermuxTool = TermuxTool(context, dispatcher)
+
+    @Provides
+    @Singleton
+    fun provideBuiltinTools(
+        @ApplicationContext context: Context,
+        client: OkHttpClient,
+        @IoDispatcher dispatcher: CoroutineDispatcher,
+    ): BuiltinTools = BuiltinTools(context, client, dispatcher)
+
+    /**
+     * Every tool the agent can see, shell included.
+     *
+     * The shell tool is registered unconditionally but sits behind
+     * [ToolTier.Shell]; whether it is ever offered to the model is decided per
+     * request by the allowed tiers, which follow the user's setting. Registering
+     * it conditionally would mean a restart were needed after enabling it.
+     */
+    @Provides
+    @Singleton
+    fun provideToolRegistry(
+        builtins: BuiltinTools,
+        termux: TermuxTool,
+    ): ToolRegistry = ToolRegistry(builtins.all() + termux.tool())
 }

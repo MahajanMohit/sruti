@@ -1,5 +1,9 @@
 package dev.sruti.ui
 
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
@@ -35,6 +39,9 @@ import dev.sruti.ui.library.SettingsScreen
 import dev.sruti.ui.phase0.Phase0Screen
 import dev.sruti.llm.DeviceCapabilities
 import dev.sruti.llm.NativeBackends
+import dev.sruti.ui.theme.Haptic
+import dev.sruti.ui.theme.LocalHaptics
+import dev.sruti.ui.theme.Motion
 import dev.sruti.work.ModelJobState
 
 private object Routes {
@@ -62,6 +69,7 @@ private data class TopLevelDestination(
 fun SrutiApp() {
     val navController = rememberNavController()
     val context = LocalContext.current
+    val haptics = LocalHaptics.current
 
     val topLevel = listOf(
         TopLevelDestination(Routes.CHAT, "Chat") {
@@ -86,6 +94,7 @@ fun SrutiApp() {
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
+                                if (!selected) haptics.play(Haptic.Select)
                                 navController.navigate(destination.route) {
                                     // Switching tabs should not stack duplicates,
                                     // and returning to a tab should restore where
@@ -109,6 +118,26 @@ fun SrutiApp() {
             navController = navController,
             startDestination = Routes.CHAT,
             modifier = Modifier.padding(bottom = insets.calculateBottomPadding()),
+
+            // Forward motion is a short slide plus a fade; the screen being left
+            // moves a fraction of the distance rather than sliding fully out, so
+            // the two feel connected rather than like separate cards on a stack.
+            //
+            // Springs, not durations, because a predictive-back gesture drives
+            // this animation from the user's finger — it has to be interruptible
+            // and reversible mid-flight, which a fixed-duration curve is not.
+            enterTransition = {
+                slideInHorizontally(Motion.expressive()) { it / 5 } + fadeIn(Motion.standard())
+            },
+            exitTransition = {
+                slideOutHorizontally(Motion.expressive()) { -it / 8 } + fadeOut(Motion.quick())
+            },
+            popEnterTransition = {
+                slideInHorizontally(Motion.expressive()) { -it / 8 } + fadeIn(Motion.standard())
+            },
+            popExitTransition = {
+                slideOutHorizontally(Motion.expressive()) { it / 5 } + fadeOut(Motion.quick())
+            },
         ) {
             composable(Routes.CHAT) {
                 val viewModel: ChatViewModel = hiltViewModel()
@@ -123,6 +152,9 @@ fun SrutiApp() {
                     onDeleteConversation = viewModel::deleteConversation,
                     onSelectModel = viewModel::selectModel,
                     onOpenModels = { navController.navigate(Routes.LIBRARY) },
+                    onSetAgentMode = viewModel::setAgentMode,
+                    onResolveConfirmation = viewModel::resolveConfirmation,
+                    onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 )
             }
 
@@ -171,6 +203,10 @@ fun SrutiApp() {
                 val viewModel: LibraryViewModel = hiltViewModel()
                 val library by viewModel.library.collectAsStateWithLifecycle()
 
+                // Termux may have been installed or permitted while the user was
+                // away from the app; the answer is only correct when re-read.
+                LaunchedEffect(Unit) { viewModel.refreshTermuxStatus() }
+
                 SettingsScreen(
                     tokenSet = library.tokenSet,
                     defaultQuant = library.defaultQuant,
@@ -178,6 +214,11 @@ fun SrutiApp() {
                     onSetQuant = viewModel::setDefaultQuant,
                     keepCheckpoints = library.keepCheckpoints,
                     onSetKeepCheckpoints = viewModel::setKeepCheckpoints,
+                    shellEnabled = library.shellEnabled,
+                    termuxInstalled = library.termuxInstalled,
+                    termuxPermitted = library.termuxPermitted,
+                    onSetShellEnabled = viewModel::setShellEnabled,
+                    onRequestTermuxPermission = { requestTermuxPermission(context) },
                     onRunBenchmark = { navController.navigate(Routes.BENCHMARK) },
                     onOpenAbout = { navController.navigate(Routes.ABOUT) },
                     onBack = { navController.popBackStack() },
@@ -235,4 +276,23 @@ private fun openUrl(context: android.content.Context, url: String) {
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
         )
     }
+}
+
+/**
+ * Asks Termux for the RUN_COMMAND permission.
+ *
+ * A normal runtime request: Termux declares it as a dangerous permission, so the
+ * system prompt is the only way to obtain it. Nothing here can grant it, and a
+ * user who declines simply keeps a working app without the shell tier.
+ */
+private fun requestTermuxPermission(context: android.content.Context) {
+    val activity = generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }
+        .filterIsInstance<android.app.Activity>()
+        .firstOrNull() ?: return
+
+    androidx.core.app.ActivityCompat.requestPermissions(
+        activity,
+        arrayOf("com.termux.permission.RUN_COMMAND"),
+        /*requestCode=*/1001,
+    )
 }

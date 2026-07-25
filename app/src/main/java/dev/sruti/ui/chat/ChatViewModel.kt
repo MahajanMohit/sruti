@@ -1,6 +1,7 @@
 package dev.sruti.ui.chat
 
 import android.app.Application
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -30,6 +31,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /** A message as shown in the transcript. */
+@Immutable
 data class DisplayMessage(
     val id: Long,
     val role: ChatMessage.Role,
@@ -39,6 +41,7 @@ data class DisplayMessage(
 )
 
 /** A past conversation, as listed in the history sheet. */
+@Immutable
 data class ConversationSummary(
     val id: Long,
     val title: String,
@@ -46,6 +49,30 @@ data class ConversationSummary(
     val modelFileName: String,
 )
 
+/**
+ * One line of the agent's visible trace.
+ *
+ * The trace is not a debugging aid, it is the product: a local model will pick
+ * the wrong tool sometimes, and the only thing that makes that acceptable is
+ * that every step is legible before and after it runs.
+ */
+@Immutable
+data class TraceLine(
+    val text: String,
+    val kind: Kind,
+) {
+    enum class Kind { Step, Tool, Result, Failure }
+}
+
+/** A tool call waiting for the user to allow or decline it. */
+@Immutable
+data class PendingConfirmation(
+    val toolName: String,
+    val description: String,
+    val arguments: Map<String, String>,
+)
+
+@Immutable
 data class ChatUiState(
     val models: List<InstalledModel> = emptyList(),
     val selectedModel: InstalledModel? = null,
@@ -70,6 +97,13 @@ data class ChatUiState(
     val systemPrompt: String = "",
     val params: ChatParams = ChatParams(),
     val error: String? = null,
+
+    /** When on, a message is run through the agent rather than answered directly. */
+    val agentMode: Boolean = false,
+    val shellEnabled: Boolean = false,
+    val termuxAvailable: Boolean = false,
+    val trace: List<TraceLine> = emptyList(),
+    val pendingConfirmation: PendingConfirmation? = null,
 ) {
     val contextFraction: Float
         get() = if (contextTotal > 0) contextUsed.toFloat() / contextTotal else 0f
@@ -83,6 +117,8 @@ class ChatViewModel @Inject constructor(
     private val store: ModelStore,
     private val dao: ChatDao,
     private val settings: dev.sruti.settings.SettingsStore,
+    private val tools: dev.sruti.agent.ToolRegistry,
+    private val termux: dev.sruti.agent.TermuxTool,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -95,6 +131,9 @@ class ChatViewModel @Inject constructor(
     private var conversationId: Long = 0
     private var generationJob: Job? = null
 
+    /** Completed by the confirmation dialog; the agent waits on it. */
+    private var confirmation: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+
     init {
         refreshModels()
 
@@ -104,6 +143,14 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             ModelWorkService.state.collect { state ->
                 if (state is ModelJobState.Succeeded) refreshModels()
+            }
+        }
+
+        viewModelScope.launch {
+            settings.shellEnabled.collect { enabled ->
+                _uiState.update {
+                    it.copy(shellEnabled = enabled, termuxAvailable = termux.isAvailable())
+                }
             }
         }
 
@@ -318,7 +365,13 @@ class ChatViewModel @Inject constructor(
                     streamingText = "",
                     isGenerating = true,
                     error = null,
+                    trace = emptyList(),
                 )
+            }
+
+            if (_uiState.value.agentMode) {
+                runAgent(active, trimmed)
+                return@launch
             }
 
             val history = buildHistory()
@@ -375,6 +428,137 @@ class ChatViewModel @Inject constructor(
     }
 
     /** Persists whatever was generated, including a reply cut short by [stop]. */
+    // --- agent ----------------------------------------------------------------
+
+    fun setAgentMode(enabled: Boolean) {
+        _uiState.update { it.copy(agentMode = enabled) }
+    }
+
+    /** Answers the dialog the agent is blocked on. */
+    fun resolveConfirmation(allow: Boolean) {
+        confirmation?.complete(allow)
+        confirmation = null
+        _uiState.update { it.copy(pendingConfirmation = null) }
+    }
+
+    /**
+     * Runs one request through the agent harness.
+     *
+     * Every step is appended to a visible trace as it happens rather than
+     * summarised at the end: when the model picks the wrong tool — and at this
+     * size it sometimes will — the user needs to see that while it is still
+     * happening, not read about it afterwards.
+     *
+     * The shell tier is offered only when the user has enabled it *and* Termux is
+     * actually reachable. Offering a tool that cannot run teaches the model to
+     * pick it and then fail.
+     */
+    private suspend fun runAgent(active: ChatSession, request: String) {
+        val allowShell = _uiState.value.shellEnabled && termux.isAvailable()
+        val tiers = buildSet {
+            add(dev.sruti.agent.ToolTier.InApp)
+            if (allowShell) add(dev.sruti.agent.ToolTier.Shell)
+        }
+
+        fun trace(text: String, kind: TraceLine.Kind) {
+            _uiState.update { it.copy(trace = it.trace + TraceLine(text, kind)) }
+        }
+
+        val executor = dev.sruti.agent.AgentExecutor(active, tools)
+
+        runCatching {
+            executor.run(
+                request = request,
+                allowedTiers = tiers,
+                confirm = { tool, arguments ->
+                    // Suspends here until the dialog is answered. Anything that
+                    // changes state on the device is the user's decision, not the
+                    // model's — that is the whole point of the tier system.
+                    val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                    confirmation = deferred
+                    _uiState.update {
+                        it.copy(
+                            pendingConfirmation = PendingConfirmation(
+                                toolName = tool.name,
+                                description = tool.description,
+                                arguments = arguments,
+                            ),
+                        )
+                    }
+                    deferred.await()
+                },
+            ).collect { event ->
+                when (event) {
+                    is dev.sruti.agent.AgentEvent.StepStarted ->
+                        trace("Step ${event.step} of ${event.maxSteps}", TraceLine.Kind.Step)
+
+                    is dev.sruti.agent.AgentEvent.CandidatesRetrieved ->
+                        trace(
+                            "Considering: " + event.tools.joinToString(", ") { it.name },
+                            TraceLine.Kind.Step,
+                        )
+
+                    is dev.sruti.agent.AgentEvent.ToolChosen ->
+                        trace("Chose ${event.tool.name}", TraceLine.Kind.Tool)
+
+                    is dev.sruti.agent.AgentEvent.ArgumentsExtracted ->
+                        trace(
+                            event.tool.name + "(" +
+                                event.arguments.entries.joinToString(", ") { "${it.key}=${it.value}" } +
+                                ")",
+                            TraceLine.Kind.Tool,
+                        )
+
+                    is dev.sruti.agent.AgentEvent.ConfirmationRequired -> Unit
+
+                    is dev.sruti.agent.AgentEvent.ToolFinished -> when (val r = event.result) {
+                        is dev.sruti.agent.ToolResult.Success ->
+                            trace(r.output.take(400), TraceLine.Kind.Result)
+                        is dev.sruti.agent.ToolResult.Failure ->
+                            trace(r.message, TraceLine.Kind.Failure)
+                        dev.sruti.agent.ToolResult.Declined ->
+                            trace("Declined", TraceLine.Kind.Failure)
+                    }
+
+                    is dev.sruti.agent.AgentEvent.AnswerToken ->
+                        _uiState.update { it.copy(streamingText = it.streamingText + event.piece) }
+
+                    is dev.sruti.agent.AgentEvent.Finished -> {
+                        // Named honestly. "Reached the step limit" is a different
+                        // outcome from "answered", and conflating them is how a
+                        // half-finished task looks like a completed one.
+                        val note = when (event.reason) {
+                            dev.sruti.agent.AgentEvent.Finished.Reason.Answered -> null
+                            dev.sruti.agent.AgentEvent.Finished.Reason.StepLimit ->
+                                "Stopped at the step limit without finishing."
+                            dev.sruti.agent.AgentEvent.Finished.Reason.Declined ->
+                                "Stopped because you declined the tool call."
+                            dev.sruti.agent.AgentEvent.Finished.Reason.NoToolApplies ->
+                                "No available tool matched this request."
+                            dev.sruti.agent.AgentEvent.Finished.Reason.Failed ->
+                                "The agent could not complete this."
+                        }
+                        note?.let { trace(it, TraceLine.Kind.Failure) }
+                    }
+
+                    is dev.sruti.agent.AgentEvent.Failed ->
+                        trace(event.message, TraceLine.Kind.Failure)
+                }
+            }
+        }.onFailure { t ->
+            if (t !is kotlinx.coroutines.CancellationException) {
+                _uiState.update { it.copy(error = t.message ?: "the agent failed") }
+            }
+        }
+
+        // A cancelled run must not leave the dialog up with nothing behind it.
+        confirmation?.complete(false)
+        confirmation = null
+        _uiState.update { it.copy(pendingConfirmation = null) }
+
+        finishTurn(metrics = null)
+    }
+
     private suspend fun finishTurn(metrics: ChatMetrics?) {
         val reply = _uiState.value.streamingText
         if (reply.isNotBlank()) {

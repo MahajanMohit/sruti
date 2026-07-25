@@ -8,6 +8,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
@@ -64,9 +65,14 @@ fun SrutiTheme(
         else -> LightColors
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = SrutiTypography,
-        content = content,
-    )
+    // Provided alongside the colour scheme because haptics are part of the same
+    // design system: both describe how the app presents itself, and a composable
+    // that needs one usually needs the other.
+    CompositionLocalProvider(LocalHaptics provides rememberHaptics()) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = SrutiTypography,
+            content = content,
+        )
+    }
 }

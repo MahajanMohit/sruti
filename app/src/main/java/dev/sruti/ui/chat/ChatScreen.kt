@@ -32,11 +32,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,6 +68,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.sruti.llm.ChatMessage
+import dev.sruti.llm.ChatMetrics
+import dev.sruti.ui.theme.Haptic
+import dev.sruti.ui.theme.LocalHaptics
 import dev.sruti.ui.theme.Motion
 import java.text.DateFormat
 import java.util.Date
@@ -81,10 +87,40 @@ fun ChatScreen(
     onDeleteConversation: (Long) -> Unit,
     onSelectModel: (dev.sruti.hub.InstalledModel) -> Unit,
     onOpenModels: () -> Unit,
+    onSetAgentMode: (Boolean) -> Unit,
+    onResolveConfirmation: (Boolean) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
     var modelMenuOpen by remember { mutableStateOf(false) }
     var historyOpen by remember { mutableStateOf(false) }
+    val haptics = LocalHaptics.current
+
+    // The model's half of the conversation, felt rather than watched. Keyed on
+    // the transition itself so each fires exactly once: the first token says the
+    // wait is over, and completion says the reply is whole.
+    LaunchedEffect(state.streamingText.isNotEmpty()) {
+        if (state.streamingText.isNotEmpty()) haptics.play(Haptic.FirstToken)
+    }
+    // Only on the true -> false edge. Keying on the flag alone would fire once on
+    // entering the screen, and again every time a stored conversation is opened.
+    var wasGenerating by remember { mutableStateOf(false) }
+    LaunchedEffect(state.isGenerating) {
+        if (wasGenerating && !state.isGenerating) haptics.play(Haptic.Complete)
+        wasGenerating = state.isGenerating
+    }
+    LaunchedEffect(state.error) {
+        if (state.error != null) haptics.play(Haptic.Error)
+    }
+
+    state.pendingConfirmation?.let { pending ->
+        LaunchedEffect(pending) { haptics.play(Haptic.ToolCall) }
+        ConfirmationDialog(
+            pending = pending,
+            onAllow = { onResolveConfirmation(true) },
+            onDecline = { onResolveConfirmation(false) },
+        )
+    }
 
     if (historyOpen) {
         HistorySheet(
@@ -110,7 +146,13 @@ fun ChatScreen(
                             maxLines = 1,
                             overflow = TextOverflow.MiddleEllipsis,
                         )
-                        ContextLine(state)
+                        ContextLine(
+                            isLoadingModel = state.isLoadingModel,
+                            modelReady = state.modelReady,
+                            contextUsed = state.contextUsed,
+                            contextTotal = state.contextTotal,
+                            metrics = state.lastMetrics,
+                        )
                     }
                 },
                 actions = {
@@ -123,6 +165,27 @@ fun ChatScreen(
                         Icon(
                             Icons.Outlined.History,
                             contentDescription = "Past conversations",
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            haptics.play(Haptic.Select)
+                            onSetAgentMode(!state.agentMode)
+                        },
+                        enabled = state.modelReady,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Build,
+                            contentDescription = if (state.agentMode) {
+                                "Agent mode on"
+                            } else {
+                                "Agent mode off"
+                            },
+                            tint = if (state.agentMode) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                LocalContentColor.current
+                            },
                         )
                     }
                     IconButton(onClick = onNewConversation, enabled = state.modelReady) {
@@ -141,6 +204,7 @@ fun ChatScreen(
                                     text = { Text(model.metadata.displayName) },
                                     onClick = {
                                         modelMenuOpen = false
+                                        haptics.play(Haptic.Select)
                                         onSelectModel(model)
                                     },
                                 )
@@ -166,7 +230,7 @@ fun ChatScreen(
                 .padding(insets)
                 .imePadding(),
         ) {
-            ContextMeter(state)
+            ContextMeter(modelReady = state.modelReady, contextFraction = state.contextFraction)
 
             AnimatedVisibility(
                 visible = state.thermalNotice.isNotEmpty(),
@@ -200,7 +264,24 @@ fun ChatScreen(
                 }
             }
 
-            Transcript(state = state, modifier = Modifier.weight(1f))
+            AgentBanner(
+                agentMode = state.agentMode,
+                shellEnabled = state.shellEnabled,
+                termuxAvailable = state.termuxAvailable,
+                onOpenSettings = onOpenSettings,
+            )
+
+            AgentTrace(trace = state.trace)
+
+            // Passed field by field rather than as the whole state: streamingText
+            // changes on every flushed frame, and a composable taking the state
+            // object recomposes then even when nothing it draws has changed.
+            Transcript(
+                messages = state.messages,
+                streamingText = state.streamingText,
+                isGenerating = state.isGenerating,
+                modifier = Modifier.weight(1f),
+            )
 
             Composer(
                 draft = draft,
@@ -208,23 +289,33 @@ fun ChatScreen(
                 enabled = state.canSend,
                 isGenerating = state.isGenerating,
                 onSend = {
+                    haptics.play(Haptic.Send)
                     onSend(draft)
                     draft = ""
                 },
-                onStop = onStop,
+                onStop = {
+                    haptics.play(Haptic.Select)
+                    onStop()
+                },
             )
         }
     }
 }
 
 @Composable
-private fun ContextLine(state: ChatUiState) {
+private fun ContextLine(
+    isLoadingModel: Boolean,
+    modelReady: Boolean,
+    contextUsed: Int,
+    contextTotal: Int,
+    metrics: ChatMetrics?,
+) {
     val text = when {
-        state.isLoadingModel -> "Loading model…"
-        !state.modelReady -> "Choose a model to begin"
+        isLoadingModel -> "Loading model…"
+        !modelReady -> "Choose a model to begin"
         else -> buildString {
-            append("${state.contextUsed} / ${state.contextTotal} tokens")
-            state.lastMetrics?.let { m ->
+            append("$contextUsed / $contextTotal tokens")
+            metrics?.let { m ->
                 if (m.decodeTokensPerSecond > 0) {
                     append(" · ")
                     append(String.format(Locale.US, "%.1f tok/s", m.decodeTokensPerSecond))
@@ -246,11 +337,11 @@ private fun ContextLine(state: ChatUiState) {
 }
 
 @Composable
-private fun ContextMeter(state: ChatUiState) {
-    if (!state.modelReady) return
+private fun ContextMeter(modelReady: Boolean, contextFraction: Float) {
+    if (!modelReady) return
 
     val fraction by animateFloatAsState(
-        targetValue = state.contextFraction,
+        targetValue = contextFraction,
         animationSpec = Motion.standard(),
         label = "contextFill",
     )
@@ -261,7 +352,7 @@ private fun ContextMeter(state: ChatUiState) {
             .height(2.dp),
         // Turns a warning colour as the window fills, which is when the oldest
         // turns are about to be evicted.
-        color = if (state.contextFraction > 0.85f) {
+        color = if (contextFraction > 0.85f) {
             MaterialTheme.colorScheme.error
         } else {
             MaterialTheme.colorScheme.primary
@@ -270,13 +361,18 @@ private fun ContextMeter(state: ChatUiState) {
 }
 
 @Composable
-private fun Transcript(state: ChatUiState, modifier: Modifier = Modifier) {
+private fun Transcript(
+    messages: List<DisplayMessage>,
+    streamingText: String,
+    isGenerating: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val listState = rememberLazyListState()
 
     // Follow the tail as the reply grows. Keyed on length rather than a token
     // count so it also tracks the streaming message.
-    LaunchedEffect(state.messages.size, state.streamingText.length) {
-        val lastIndex = state.messages.size + if (state.streamingText.isNotEmpty()) 1 else 0
+    LaunchedEffect(messages.size, streamingText.length) {
+        val lastIndex = messages.size + if (streamingText.isNotEmpty()) 1 else 0
         if (lastIndex > 0) {
             listState.animateScrollToItem(lastIndex - 1)
         }
@@ -290,7 +386,7 @@ private fun Transcript(state: ChatUiState, modifier: Modifier = Modifier) {
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(state.messages, key = { it.id }) { message ->
+        items(messages, key = { it.id }) { message ->
             MessageBubble(
                 content = message.content,
                 isUser = message.role == ChatMessage.Role.User,
@@ -307,13 +403,13 @@ private fun Transcript(state: ChatUiState, modifier: Modifier = Modifier) {
             )
         }
 
-        if (state.streamingText.isNotEmpty()) {
+        if (streamingText.isNotEmpty()) {
             item(key = "streaming") {
-                MessageBubble(content = state.streamingText, isUser = false, footnote = null)
+                MessageBubble(content = streamingText, isUser = false, footnote = null)
             }
         }
 
-        if (state.isGenerating && state.streamingText.isEmpty()) {
+        if (isGenerating && streamingText.isEmpty()) {
             item(key = "thinking") {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -437,6 +533,7 @@ private fun HistorySheet(
     onDelete: (Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val haptics = LocalHaptics.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -478,7 +575,12 @@ private fun HistorySheet(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    IconButton(onClick = { onDelete(conversation.id) }) {
+                    IconButton(
+                        onClick = {
+                            haptics.play(Haptic.Destructive)
+                            onDelete(conversation.id)
+                        },
+                    ) {
                         Icon(
                             Icons.Outlined.Delete,
                             contentDescription = "Delete conversation",
@@ -502,4 +604,115 @@ private fun relativeTime(millis: Long): String {
         minutes < 60 * 24 * 7 -> "${minutes / (60 * 24)} d ago"
         else -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(millis))
     }
+}
+
+/**
+ * States what agent mode can and cannot reach right now.
+ *
+ * Shown rather than hidden because the difference between "can read files" and
+ * "can run shell commands" is the difference the user most needs to know before
+ * typing a request — and because a tool that silently is not there looks like a
+ * model that cannot follow instructions.
+ */
+@Composable
+private fun AgentBanner(
+    agentMode: Boolean,
+    shellEnabled: Boolean,
+    termuxAvailable: Boolean,
+    onOpenSettings: () -> Unit,
+) {
+    AnimatedVisibility(
+        visible = agentMode,
+        enter = fadeIn(Motion.quick()) + expandVertically(Motion.size()),
+        exit = fadeOut(Motion.quick()) + shrinkVertically(Motion.size()),
+    ) {
+        val text = when {
+            shellEnabled && termuxAvailable ->
+                "Agent mode · files, network, clipboard and the Termux shell"
+            shellEnabled ->
+                "Agent mode · shell is on but Termux is not reachable. Tap to fix."
+            else ->
+                "Agent mode · files, network and clipboard. Tap to enable the shell."
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenSettings)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(15.dp))
+            Text(text, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+/** The agent's steps, in the order they happened. */
+@Composable
+private fun AgentTrace(trace: List<TraceLine>) {
+    if (trace.isEmpty()) return
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 200.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        trace.forEach { line ->
+            Text(
+                text = line.text,
+                style = MaterialTheme.typography.labelSmall,
+                color = when (line.kind) {
+                    TraceLine.Kind.Failure -> MaterialTheme.colorScheme.error
+                    TraceLine.Kind.Tool -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Asks before a tool that changes something runs.
+ *
+ * The arguments are shown verbatim, not summarised. A shell command the user
+ * cannot read in full is a shell command they cannot meaningfully approve.
+ */
+@Composable
+private fun ConfirmationDialog(
+    pending: PendingConfirmation,
+    onAllow: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDecline,
+        title = { Text("Run ${pending.toolName}?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(pending.description, style = MaterialTheme.typography.bodyMedium)
+                SelectionContainer {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 240.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        pending.arguments.forEach { (name, value) ->
+                            Text(
+                                text = "$name = $value",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onAllow) { Text("Run") } },
+        dismissButton = { TextButton(onClick = onDecline) { Text("Decline") } },
+    )
 }

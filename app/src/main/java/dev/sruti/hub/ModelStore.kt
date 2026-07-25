@@ -1,6 +1,7 @@
 package dev.sruti.hub
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import dev.sruti.convert.QuantType
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
@@ -30,6 +31,10 @@ data class LocalModel(
 }
 
 /** A model on disk, with its actual file. */
+// java.io.File is a path holder, never mutated here, but Compose cannot know
+// that. Without this every list of models is unstable, and every screen holding
+// one recomposes on any unrelated state change.
+@Immutable
 data class InstalledModel(
     val metadata: LocalModel,
     val file: File,
@@ -38,6 +43,7 @@ data class InstalledModel(
 }
 
 /** A checkpoint directory awaiting conversion. */
+@Immutable
 data class StagedCheckpoint(
     val directory: File,
     val repoId: String,

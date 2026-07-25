@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -171,4 +173,37 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
+}
+
+// Compose compiler stability and recomposition reports.
+//
+// Off by default because they slow the build; enable with -Psruti.composeReports
+// when changing anything on the token-streaming path. Unstable parameters there
+// are the difference between a smooth 120 Hz stream and a recomposition storm,
+// and the reports are the only way to see them rather than guess.
+composeCompiler {
+    if (project.hasProperty("sruti.composeReports")) {
+        val dir = layout.buildDirectory.dir("compose-reports")
+        reportsDestination.set(dir)
+        metricsDestination.set(dir)
+    }
+}
+
+// Unit tests that reach the network need the same proxy the rest of the build
+// uses; without it OkHttp bypasses it and the live Hub tests self-skip.
+tasks.withType<Test>().configureEach {
+    listOf("http", "https").forEach { scheme ->
+        System.getenv("${scheme.uppercase()}_PROXY")?.let { raw ->
+            val uri = URI(raw)
+            systemProperty("$scheme.proxyHost", uri.host)
+            systemProperty("$scheme.proxyPort", uri.port.toString())
+        }
+    }
+    System.getProperty("javax.net.ssl.trustStore")?.let {
+        systemProperty("javax.net.ssl.trustStore", it)
+        systemProperty("javax.net.ssl.trustStorePassword",
+            System.getProperty("javax.net.ssl.trustStorePassword") ?: "changeit")
+        systemProperty("javax.net.ssl.trustStoreType",
+            System.getProperty("javax.net.ssl.trustStoreType") ?: "PKCS12")
+    }
 }

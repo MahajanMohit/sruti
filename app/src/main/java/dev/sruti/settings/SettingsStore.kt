@@ -45,6 +45,16 @@ class SettingsStore(private val context: Context) {
      * converts to. On, re-converting at a different quantization costs only the
      * conversion — the gigabytes are already on disk.
      */
+    /**
+     * Whether the agent may run shell commands through Termux.
+     *
+     * Off until the user turns it on, and separate from whether Termux is
+     * installed: having the app available is not consent to let a language model
+     * drive it.
+     */
+    val shellEnabled: Flow<Boolean> =
+        context.dataStore.data.map { it[SHELL_ENABLED_KEY] ?: false }
+
     val keepCheckpoints: Flow<Boolean> =
         context.dataStore.data.map { it[KEEP_CHECKPOINTS_KEY] ?: false }
 
@@ -66,16 +76,23 @@ class SettingsStore(private val context: Context) {
 
     suspend fun currentGpuLayers(): Int = gpuLayers.first()
 
+    suspend fun setShellEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[SHELL_ENABLED_KEY] = enabled }
+    }
+
     suspend fun setKeepCheckpoints(keep: Boolean) {
         context.dataStore.edit { it[KEEP_CHECKPOINTS_KEY] = keep }
     }
 
     suspend fun currentKeepCheckpoints(): Boolean = keepCheckpoints.first()
 
+    suspend fun currentShellEnabled(): Boolean = shellEnabled.first()
+
     private companion object {
         val TOKEN_KEY = stringPreferencesKey("hf_token")
         val QUANT_KEY = stringPreferencesKey("default_quant")
         val GPU_LAYERS_KEY = intPreferencesKey("gpu_layers")
         val KEEP_CHECKPOINTS_KEY = booleanPreferencesKey("keep_checkpoints")
+        val SHELL_ENABLED_KEY = booleanPreferencesKey("shell_enabled")
     }
 }
