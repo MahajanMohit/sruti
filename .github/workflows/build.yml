@@ -1,0 +1,202 @@
+name: Build APK
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A newer push supersedes an in-flight run on the same ref. Native builds are
+  # expensive; queueing several of them behind each other helps nobody.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Must match the version the CMake build expects. A mismatch fails deep inside
+  # the native build with an error that does not mention the NDK.
+  NDK_VERSION: 27.2.12479018
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Nothing builds without llama.cpp; a shallow clone that skips it fails
+          # at CMake configure time with a misleading "missing CMakeLists" error.
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Pure host C++: safetensors parsing, tensor ops, the RoPE permutation and
+      # vocabulary conversion, under ASan and UBSan. No SDK or device needed, and
+      # it is where the converter's silent-failure traps are caught.
+      - name: Native tests
+        run: ./tools/run_native_tests.sh
+
+      - name: Kotlin unit tests
+        run: ./gradlew testDebugUnitTest --no-configuration-cache
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+          retention-days: 14
+
+  build-debug:
+    name: Debug APK
+    runs-on: ubuntu-latest
+    # The native build dominates: llama.cpp plus seven ggml CPU variants.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install NDK
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;${NDK_VERSION}" "cmake;3.22.1" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      # Compiled objects, not Gradle's cache. The native build is the expensive
+      # part and Gradle's own caching does not cover CMake output.
+      - name: Cache native build
+        uses: actions/cache@v4
+        with:
+          path: app/.cxx
+          key: cxx-debug-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ hashFiles('app/src/main/cpp/**', 'native/llama.cpp/CMakeLists.txt') }}
+          restore-keys: |
+            cxx-debug-${{ runner.os }}-${{ env.NDK_VERSION }}-
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Report APK contents
+        run: |
+          APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+          echo "### Debug APK" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Size: $(du -h "$APK" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          unzip -l "$APK" | grep '\.so$' | awk '{printf "%8.1f KiB  %s\n", $1/1024, $4}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # Every ggml CPU variant must be present. If they are missing the app still
+      # builds and then fails at runtime with "no backends are loaded", which is
+      # exactly the kind of failure CI should catch rather than the user.
+      - name: Verify native libraries are packaged
+        run: |
+          APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+          for lib in libsruti_llm.so libllama.so libggml.so libggml-base.so; do
+            unzip -l "$APK" | grep -q "$lib" || { echo "missing $lib"; exit 1; }
+          done
+          variants=$(unzip -l "$APK" | grep -c 'libggml-cpu-android' || true)
+          echo "ggml CPU variants packaged: $variants"
+          [ "$variants" -ge 5 ] || { echo "expected the ggml CPU variants to be packaged"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sruti-debug-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+  build-release:
+    name: Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Only from the default branch or a manual run: a release build costs the
+    # same 90 minutes as a debug one and is not useful on every feature branch.
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install NDK
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;${NDK_VERSION}" "cmake;3.22.1" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Cache native build
+        uses: actions/cache@v4
+        with:
+          path: app/.cxx
+          key: cxx-release-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ hashFiles('app/src/main/cpp/**', 'native/llama.cpp/CMakeLists.txt') }}
+          restore-keys: |
+            cxx-release-${{ runner.os }}-${{ env.NDK_VERSION }}-
+
+      # Written to a path outside the repository so a stray `git add -A` cannot
+      # commit it. Skipped entirely when the secret is absent, which keeps forks
+      # and first-time clones building.
+      - name: Decode keystore
+        id: keystore
+        # Referencing the secret directly, not a step-level env var: a step's own
+        # `env` block is not in scope for its `if`, so that form is always false
+        # and signing would silently never happen.
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          if [ ! -s "$RUNNER_TEMP/release.jks" ]; then
+            echo "keystore decoded to an empty file -- is KEYSTORE_BASE64 a single line?"
+            exit 1
+          fi
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        env:
+          SRUTI_KEYSTORE_FILE: ${{ steps.keystore.outputs.available == 'true' && format('{0}/release.jks', runner.temp) || '' }}
+          SRUTI_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SRUTI_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SRUTI_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Report APK
+        run: |
+          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "### Release APK" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "File: $(basename "$APK")" >> "$GITHUB_STEP_SUMMARY"
+          echo "Size: $(du -h "$APK" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.keystore.outputs.available }}" != "true" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Unsigned** — no KEYSTORE_BASE64 secret is configured, so this cannot be installed directly." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sruti-release-${{ steps.keystore.outputs.available == 'true' && 'signed' || 'unsigned' }}-${{ github.run_number }}
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 90
+          if-no-files-found: error

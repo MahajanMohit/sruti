@@ -10,9 +10,13 @@ anywhere in the pipeline.
 Inference is **strictly local**. No prompt, no completion, and no telemetry is ever
 sent to a remote model.
 
-> **Status: Phase 3.** Browse, download, convert, chat, and a grammar-constrained
-> agent harness. The converter produces output byte-identical to llama.cpp's own.
-> Nothing has yet run on a physical device. See [the roadmap](#roadmap).
+> **Status: v0.1, shippable.** Browse, download, convert, chat, and a
+> grammar-constrained agent harness. The converter produces output byte-identical
+> to llama.cpp's own. **Inference is CPU-only** — see [`docs/gpu.md`](docs/gpu.md)
+> for why. Nothing has yet run on a physical device.
+>
+> Install from the **Artifacts** of a [CI run](../../actions), or build it
+> yourself — see [`docs/building.md`](docs/building.md).
 
 ---
 
@@ -271,8 +275,8 @@ tracks: RSS is what makes the low-memory killer take an interest.
 | 1 | Model acquisition + on-device safetensors → GGUF conversion | **complete** — browse, download, convert, manage |
 | 2 | Chat: KV-cache reuse, context management, thermal governor | **complete** |
 | 3 | Agent harness: grammar-constrained tool calls, Termux shell | **complete** |
-| 4 | Refinement: motion, haptics, 120 Hz, jank budget in CI | not started |
-| 5 | Signed release via GitHub Releases | not started |
+| 4 | Refinement: motion, haptics, 120 Hz, jank budget in CI | deferred until there is device feedback |
+| 5 | CI builds signed and unsigned APKs on every push | **complete** |
 
 ### Deliberate non-goals
 

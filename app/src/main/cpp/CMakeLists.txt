@@ -28,14 +28,19 @@ set(GGML_LLAMAFILE  OFF CACHE BOOL "" FORCE)
 # Runtime CPU dispatch. Requires the backends to be separate shared objects.
 set(GGML_CPU_ALL_VARIANTS ON  CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL       ON  CACHE BOOL "" FORCE)
-set(LLAMA_CURL      OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_COMMON   OFF CACHE BOOL "" FORCE)
-# Shared, because GGML_BACKEND_DL loads the CPU variants with dlopen.
-set(BUILD_SHARED_LIBS    ON  CACHE BOOL "" FORCE)
+
+# GPU offload is not built yet -- see docs/gpu.md.
+#
+# Not an oversight and not a stub: llama.cpp's Vulkan backend needs a glslc newer
+# than the one the NDK ships (its shaders use GL_KHR_cooperative_matrix, which the
+# bundled compiler does not parse), so enabling it means vendoring shaderc and
+# making that work in CI too. OpenCL is the better fit for Android -- its kernels
+# are compiled by the driver at runtime, so no shader toolchain is needed at build
+# time -- and is the intended route.
+#
+# The runtime side is already in place: the GPU-layer count is a user setting that
+# defaults to zero, so a backend can be switched on without touching this file's
+# callers.
 
 add_subdirectory("${LLAMA_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/llama.cpp" EXCLUDE_FROM_ALL)
 

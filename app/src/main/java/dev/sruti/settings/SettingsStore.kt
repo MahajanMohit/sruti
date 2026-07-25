@@ -2,6 +2,7 @@ package dev.sruti.settings
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dev.sruti.convert.QuantType
@@ -26,6 +27,16 @@ class SettingsStore(private val context: Context) {
     val defaultQuantType: Flow<QuantType> =
         context.dataStore.data.map { QuantType.fromId(it[QUANT_KEY] ?: QuantType.Q4_K_M.id) }
 
+    /**
+     * Transformer layers to offload to the GPU. Zero keeps everything on the CPU.
+     *
+     * Defaults to zero deliberately. A mobile GPU shares memory bandwidth with
+     * the CPU, and for a 1–2B model it frequently loses — so this is exposed as a
+     * measurable choice rather than switched on as an assumption. The benchmark
+     * is the thing that should decide it.
+     */
+    val gpuLayers: Flow<Int> = context.dataStore.data.map { it[GPU_LAYERS_KEY] ?: 0 }
+
     suspend fun currentToken(): String? = huggingFaceToken.first()
 
     suspend fun setHuggingFaceToken(token: String?) {
@@ -38,8 +49,15 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { it[QUANT_KEY] = quantType.id }
     }
 
+    suspend fun setGpuLayers(layers: Int) {
+        context.dataStore.edit { it[GPU_LAYERS_KEY] = layers.coerceAtLeast(0) }
+    }
+
+    suspend fun currentGpuLayers(): Int = gpuLayers.first()
+
     private companion object {
         val TOKEN_KEY = stringPreferencesKey("hf_token")
         val QUANT_KEY = stringPreferencesKey("default_quant")
+        val GPU_LAYERS_KEY = intPreferencesKey("gpu_layers")
     }
 }

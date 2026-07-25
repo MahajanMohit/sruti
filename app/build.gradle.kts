@@ -17,7 +17,7 @@ android {
         minSdk = 31
         targetSdk = 36
         versionCode = 1
-        versionName = "0.1.0-phase0"
+        versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -62,6 +62,24 @@ android {
         }
     }
 
+    // Signing details come from the environment, never from a file in the tree.
+    // Absent, the release build still succeeds and produces an unsigned APK —
+    // which keeps forks and fresh clones building rather than failing on a secret
+    // they were never going to have.
+    val keystoreFile = System.getenv("SRUTI_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+    val hasSigningConfig = keystoreFile != null && file(keystoreFile).exists()
+
+    signingConfigs {
+        if (hasSigningConfig) {
+            create("release") {
+                storeFile = file(keystoreFile!!)
+                storePassword = System.getenv("SRUTI_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("SRUTI_KEY_ALIAS")
+                keyPassword = System.getenv("SRUTI_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -70,9 +88,16 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (hasSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             isJniDebuggable = true
+            // So a debug and a release build can sit on the same device at once,
+            // which matters when comparing behaviour between them.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
     }
 

@@ -68,6 +68,7 @@ class ChatViewModel @Inject constructor(
     application: Application,
     private val store: ModelStore,
     private val dao: ChatDao,
+    private val settings: dev.sruti.settings.SettingsStore,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -111,6 +112,9 @@ class ChatViewModel @Inject constructor(
                     modelFile = model.file,
                     dispatcher = Dispatchers.Default,
                     nCtx = DEFAULT_CONTEXT,
+                    // Zero unless the user opted in. Whether offload helps is a
+                    // property of the device, so it is a setting, not a default.
+                    nGpuLayers = settings.currentGpuLayers(),
                 )
                 engine = loaded
                 session = loaded.newChatSession(governor)
