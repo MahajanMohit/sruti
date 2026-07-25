@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -57,6 +58,7 @@ fun BrowseScreen(
     onQueryChanged: (String) -> Unit,
     onInspect: (String) -> Unit,
     onAcquire: (String) -> Unit,
+    onOpenModelPage: (String) -> Unit,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -83,7 +85,15 @@ fun BrowseScreen(
                 value = state.query,
                 onValueChange = onQueryChanged,
                 label = { Text("Search Hugging Face") },
-                placeholder = { Text("qwen3, llama 3.2, gemma…") },
+                supportingText = {
+                    Text(
+                        // Personal fine-tunes usually carry no pipeline tag and
+                        // never appear in search; their full id always resolves.
+                        "Paste an exact owner/model id to find models that search misses",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                },
+                placeholder = { Text("qwen3, or a full id like owner/model") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -142,6 +152,7 @@ fun BrowseScreen(
                         busy = busy,
                         onInspect = { onInspect(model.repoId) },
                         onAcquire = { onAcquire(model.repoId) },
+                        onOpenModelPage = { onOpenModelPage(model.repoId) },
                     )
                 }
             }
@@ -158,6 +169,7 @@ private fun RepoCard(
     busy: Boolean,
     onInspect: () -> Unit,
     onAcquire: () -> Unit,
+    onOpenModelPage: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -247,6 +259,20 @@ private fun RepoCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error,
                     )
+                }
+
+                if (model.isGated) {
+                    // A gated repo returns 401 until the licence is accepted on
+                    // the website, and there is no way to do that from here. A
+                    // link is the only useful thing to offer.
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Gated — accept the licence on huggingface.co first, " +
+                            "then add a token in settings.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = onOpenModelPage) { Text("Open model page") }
                 }
 
                 Spacer(Modifier.height(6.dp))

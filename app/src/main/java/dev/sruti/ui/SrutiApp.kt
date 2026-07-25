@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -25,8 +26,11 @@ import dev.sruti.ui.chat.ChatViewModel
 import dev.sruti.ui.library.BrowseScreen
 import dev.sruti.ui.library.LibraryScreen
 import dev.sruti.ui.library.LibraryViewModel
+import dev.sruti.ui.library.AboutScreen
 import dev.sruti.ui.library.SettingsScreen
 import dev.sruti.ui.phase0.Phase0Screen
+import dev.sruti.llm.DeviceCapabilities
+import dev.sruti.llm.NativeBackends
 import dev.sruti.work.ModelJobState
 
 private object Routes {
@@ -35,6 +39,7 @@ private object Routes {
     const val BROWSE = "browse"
     const val SETTINGS = "settings"
     const val BENCHMARK = "benchmark"
+    const val ABOUT = "about"
 }
 
 private data class TopLevelDestination(
@@ -46,6 +51,7 @@ private data class TopLevelDestination(
 @Composable
 fun SrutiApp() {
     val navController = rememberNavController()
+    val context = LocalContext.current
 
     val topLevel = listOf(
         TopLevelDestination(Routes.CHAT, "Chat") {
@@ -139,6 +145,7 @@ fun SrutiApp() {
                         viewModel.startAcquire(repoId)
                         navController.popBackStack()
                     },
+                    onOpenModelPage = { repoId -> openUrl(context, viewModel.modelPageUrl(repoId)) },
                     onBack = { navController.popBackStack() },
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 )
@@ -153,7 +160,10 @@ fun SrutiApp() {
                     defaultQuant = library.defaultQuant,
                     onSetToken = viewModel::setToken,
                     onSetQuant = viewModel::setDefaultQuant,
+                    keepCheckpoints = library.keepCheckpoints,
+                    onSetKeepCheckpoints = viewModel::setKeepCheckpoints,
                     onRunBenchmark = { navController.navigate(Routes.BENCHMARK) },
+                    onOpenAbout = { navController.navigate(Routes.ABOUT) },
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -161,6 +171,30 @@ fun SrutiApp() {
             composable(Routes.BENCHMARK) {
                 Phase0Screen()
             }
+
+            composable(Routes.ABOUT) {
+                AboutScreen(
+                    backendCount = NativeBackends.backendCount(),
+                    backendDetail = NativeBackends.diagnostics(),
+                    threadCount = DeviceCapabilities.recommendedThreadCount(),
+                    onBack = { navController.popBackStack() },
+                )
+            }
         }
+    }
+}
+
+/**
+ * Opens a web page.
+ *
+ * Used for accepting a gated model's licence, which can only be done on the
+ * Hugging Face site — there is no API for it.
+ */
+private fun openUrl(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(
+            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 }

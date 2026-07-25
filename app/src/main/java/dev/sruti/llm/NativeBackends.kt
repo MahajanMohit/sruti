@@ -21,11 +21,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 object NativeBackends {
 
     private val initialized = AtomicBoolean(false)
+    private var libraryDir: String = ""
 
     /** Idempotent; safe to call from anywhere. */
     fun ensureInitialized(context: Context) {
         if (initialized.compareAndSet(false, true)) {
-            LlamaBridge.nativeBackendInit(context.applicationInfo.nativeLibraryDir)
+            libraryDir = context.applicationInfo.nativeLibraryDir
+            LlamaBridge.nativeBackendInit(libraryDir)
         }
     }
 
@@ -34,4 +36,15 @@ object NativeBackends {
 
     /** Whether a usable compute backend was found. */
     fun isUsable(): Boolean = backendCount() > 0
+
+    /**
+     * What was found and where, for when nothing loaded.
+     *
+     * "No compute backend is available" on its own gives the user nothing to act
+     * on and gives a bug report nothing to work from. This names the directory and
+     * lists what is in it.
+     */
+    fun diagnostics(): String =
+        runCatching { LlamaBridge.nativeBackendDiagnostics(libraryDir) }
+            .getOrElse { "could not read backend diagnostics: ${it.message}" }
 }

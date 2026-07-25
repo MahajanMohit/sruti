@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -18,6 +20,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -40,7 +43,10 @@ fun SettingsScreen(
     defaultQuant: QuantType,
     onSetToken: (String?) -> Unit,
     onSetQuant: (QuantType) -> Unit,
+    keepCheckpoints: Boolean,
+    onSetKeepCheckpoints: (Boolean) -> Unit,
     onRunBenchmark: () -> Unit,
+    onOpenAbout: () -> Unit,
     onBack: () -> Unit,
 ) {
     var token by remember { mutableStateOf("") }
@@ -61,7 +67,11 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(insets)
-                .padding(horizontal = 20.dp),
+                // Without this the quantization options fall off the bottom once
+                // the token field and its explanation are present.
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("Hugging Face access token", style = MaterialTheme.typography.titleMedium)
@@ -134,6 +144,47 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            Text(
+                text = "Storage",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onSetKeepCheckpoints(!keepCheckpoints) }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Keep downloaded weights", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        // The trade is worth stating plainly: several GB of disk
+                        // against not re-downloading them to try another setting.
+                        text = "Uses several GB more, but re-converting at a different " +
+                            "quantization then costs no download",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = keepCheckpoints, onCheckedChange = onSetKeepCheckpoints)
+            }
+
+            Text(
+                text = "About",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Text(
+                text = "What this app does, which architectures it supports and why, and " +
+                    "what conversion actually involves.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = onOpenAbout) { Text("How Sruti works") }
 
             Text(
                 text = "Diagnostics",

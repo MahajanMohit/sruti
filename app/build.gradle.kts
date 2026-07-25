@@ -122,7 +122,16 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
         jniLibs {
-            useLegacyPackaging = false
+            // Extract the .so files to disk on install.
+            //
+            // Not the modern default, and deliberately so: ggml discovers its CPU
+            // backend variants by listing a directory, and with extractNativeLibs
+            // false the libraries stay inside the APK and that directory is empty.
+            // Nothing registers, and every model load fails with "no compute
+            // backend is available on this device".
+            //
+            // Costs some install size. Buys an app that runs.
+            useLegacyPackaging = true
         }
     }
 }

@@ -20,6 +20,8 @@ sealed interface ModelJobState {
         enum class Phase(val label: String) {
             Resolving("Checking model"),
             Downloading("Downloading"),
+            /** A ready-made GGUF was published, so there is nothing to convert. */
+            DownloadingGguf("Downloading ready-made model"),
             Converting("Converting"),
             Cleaning("Cleaning up"),
         }

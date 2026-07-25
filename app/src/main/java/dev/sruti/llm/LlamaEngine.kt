@@ -186,7 +186,8 @@ class LlamaEngine private constructor(
             // Backends are registered once at application start. Failing here with
             // a clear reason beats llama.cpp's opaque "no backends are loaded".
             check(NativeBackends.isUsable()) {
-                "no compute backend is available on this device"
+                "No compute backend is available on this device.\n\n" +
+                    NativeBackends.diagnostics()
             }
 
             val model = LlamaBridge.nativeLoadModel(modelFile.absolutePath, nGpuLayers)

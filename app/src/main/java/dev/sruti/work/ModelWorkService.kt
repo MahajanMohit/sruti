@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 /**
@@ -48,6 +49,7 @@ class ModelWorkService : Service() {
     @Inject lateinit var downloader: CheckpointDownloader
     @Inject lateinit var converter: ModelConverter
     @Inject lateinit var store: ModelStore
+    @Inject lateinit var settings: dev.sruti.settings.SettingsStore
 
     private val scope = CoroutineScope(SupervisorJob())
     private var job: Job? = null
@@ -113,6 +115,17 @@ class ModelWorkService : Service() {
             }
 
             val checkpoint = api.listFiles(repoId)
+
+            // If the repository already publishes a GGUF, take it. It is several
+            // times smaller than the safetensors it came from and skips
+            // conversion entirely — downloading 3 GB to rebuild a 1 GB file that
+            // is sitting right there would be indefensible.
+            val prebuilt = checkpoint.prebuiltGguf.firstOrNull { it.actualSize > 0 }
+            if (prebuilt != null) {
+                downloadPrebuiltGguf(repoId, checkpoint, prebuilt, quantType, info, ::publish)
+                return
+            }
+
             if (!checkpoint.hasSafetensors) {
                 publish(
                     ModelJobState.Failed(
@@ -184,12 +197,16 @@ class ModelWorkService : Service() {
                 ),
             )
 
-            // The checkpoint is several times the size of the result and is not
-            // needed again. Keeping it would fill the device for no benefit.
-            publish(
-                ModelJobState.Running(repoId, quantType, ModelJobState.Running.Phase.Cleaning),
-            )
-            checkpointDir.deleteRecursively()
+            // A checkpoint is several times the size of what it converts to, so
+            // it goes by default. Kept when asked, because re-converting at a
+            // different quantization then costs only the conversion rather than
+            // re-downloading gigabytes that are already on disk.
+            if (!settings.currentKeepCheckpoints()) {
+                publish(
+                    ModelJobState.Running(repoId, quantType, ModelJobState.Running.Phase.Cleaning),
+                )
+                checkpointDir.deleteRecursively()
+            }
 
             _state.value = ModelJobState.Succeeded(repoId, outputFile, warnings)
             notifyFinished("Ready: ${outputFile.nameWithoutExtension}")
@@ -203,6 +220,76 @@ class ModelWorkService : Service() {
         } finally {
             stopSelfCleanly()
         }
+    }
+
+    /**
+     * Takes a GGUF the repository already publishes, skipping conversion.
+     *
+     * The quantization is whatever the publisher chose, so it is read back off
+     * the filename rather than being the user's default — claiming otherwise in
+     * the model list would be a lie.
+     */
+    private suspend fun downloadPrebuiltGguf(
+        repoId: String,
+        checkpoint: dev.sruti.hub.RemoteCheckpoint,
+        file: dev.sruti.hub.RemoteFile,
+        requestedQuant: QuantType,
+        info: CheckpointInfo,
+        publish: (ModelJobState) -> Unit,
+    ) {
+        val outputFile = File(store.modelsDir, file.path.substringAfterLast('/'))
+
+        if (outputFile.isFile && outputFile.length() == file.actualSize) {
+            // Already have it; re-downloading a gigabyte to arrive at the same
+            // bytes helps nobody.
+            _state.value = ModelJobState.Succeeded(repoId, outputFile)
+            notifyFinished("Already installed: ${outputFile.nameWithoutExtension}")
+            return
+        }
+
+        val single = checkpoint.copy(files = listOf(file))
+        downloader.download(single, store.modelsDir)
+            .collect { event ->
+                if (event is DownloadEvent.Progress) {
+                    publish(
+                        ModelJobState.Running(
+                            repoId = repoId,
+                            quantType = requestedQuant,
+                            phase = ModelJobState.Running.Phase.DownloadingGguf,
+                            detail = event.currentFile,
+                            fraction = event.fraction,
+                            bytesDone = event.bytesDone,
+                            bytesTotal = event.bytesTotal,
+                        ),
+                    )
+                }
+            }
+
+        store.writeMetadata(
+            outputFile,
+            LocalModel(
+                fileName = outputFile.name,
+                displayName = repoId.substringAfterLast('/'),
+                sourceRepo = repoId,
+                architecture = info.displayName,
+                quantType = quantFromFileName(outputFile.name).id,
+                parameterCount = info.parameterCount,
+                convertedAtMillis = System.currentTimeMillis(),
+            ),
+        )
+
+        _state.value = ModelJobState.Succeeded(repoId, outputFile)
+        notifyFinished("Ready: ${outputFile.nameWithoutExtension}")
+    }
+
+    /** Reads the quantization out of a published GGUF's filename. */
+    private fun quantFromFileName(name: String): QuantType {
+        val upper = name.uppercase()
+        // Longest first, so Q4_K_M is not matched as Q4_K_S's prefix or vice versa.
+        return QuantType.entries
+            .sortedByDescending { it.id.length }
+            .firstOrNull { upper.contains(it.id) }
+            ?: QuantType.Q4_K_M
     }
 
     private fun stopSelfCleanly() {

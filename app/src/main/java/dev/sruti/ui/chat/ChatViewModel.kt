@@ -17,6 +17,8 @@ import dev.sruti.llm.ChatSession
 import dev.sruti.llm.LlamaEngine
 import dev.sruti.llm.ThermalGovernor
 import dev.sruti.ui.coalesceToFrames
+import dev.sruti.work.ModelWorkService
+import dev.sruti.work.ModelJobState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -82,12 +84,34 @@ class ChatViewModel @Inject constructor(
     private var generationJob: Job? = null
 
     init {
+        refreshModels()
+
+        // A conversion finishing changes what is installed, and this screen is
+        // usually not the one in front of the user when it does. Without this the
+        // new model only appears after the app is relaunched.
+        viewModelScope.launch {
+            ModelWorkService.state.collect { state ->
+                if (state is ModelJobState.Succeeded) refreshModels()
+            }
+        }
+    }
+
+    /**
+     * Re-reads installed models, selecting one if none is loaded yet.
+     *
+     * Called on entering the screen as well, since a model can also arrive by
+     * being sideloaded while the app is running.
+     */
+    fun refreshModels() {
         viewModelScope.launch {
             val models = store.installedModels()
             _uiState.update { it.copy(models = models) }
-            // Load the most recent model so the screen is usable immediately
-            // rather than presenting an empty picker.
-            models.firstOrNull()?.let { selectModel(it) }
+
+            val current = _uiState.value.selectedModel
+            val stillPresent = models.any { it.file == current?.file }
+            if (!stillPresent || current == null) {
+                models.firstOrNull()?.let { selectModel(it) }
+            }
         }
     }
 

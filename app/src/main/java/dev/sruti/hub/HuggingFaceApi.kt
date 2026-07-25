@@ -71,6 +71,18 @@ data class RemoteCheckpoint(
     val revision: String,
     val files: List<RemoteFile>,
 ) {
+    /**
+     * Ready-made GGUF files in the repository, largest last.
+     *
+     * Worth checking before anything else: many repositories publish quantized
+     * GGUFs alongside the safetensors, and downloading one is both several times
+     * smaller and skips conversion entirely.
+     */
+    val prebuiltGguf: List<RemoteFile>
+        get() = files
+            .filter { it.path.endsWith(".gguf", ignoreCase = true) }
+            .sortedBy { it.actualSize }
+
     /** Files a conversion actually needs; skips READMEs, images and ONNX exports. */
     val requiredFiles: List<RemoteFile>
         get() = files.filter { file ->
@@ -86,6 +98,10 @@ data class RemoteCheckpoint(
                     "generation_config.json",
                     "model.safetensors.index.json",
                     "special_tokens_map.json",
+                    // Newer exports keep the chat template here rather than
+                    // inside tokenizer_config.json. Skipping it converts fine and
+                    // then prompts an instruct model as a base model.
+                    "chat_template.jinja",
                 )
         }
 
@@ -120,16 +136,51 @@ class HuggingFaceApi(
         coerceInputValues = true
     }
 
+    /**
+     * Searches the Hub, and resolves an exact `owner/name` directly.
+     *
+     * The direct lookup matters: search only returns models tagged with the
+     * text-generation pipeline, and a freshly uploaded or personal fine-tune
+     * usually carries no pipeline tag at all — so it is invisible to search while
+     * being perfectly convertible. Typing its full id finds it.
+     */
     suspend fun search(query: String, limit: Int = 25): List<RemoteModelSummary> {
+        val trimmed = query.trim().removePrefix("https://huggingface.co/").trim('/')
+
+        // An exact repo id is a lookup, not a search.
+        if (trimmed.count { it == '/' } == 1 && !trimmed.contains(' ')) {
+            runCatching { modelInfo(trimmed) }
+                .onSuccess { return listOf(it) }
+            // Fall through: it may be a partial phrase that happens to have a
+            // slash, and a failed lookup should not swallow the query.
+        }
+
+        val tagged = rawSearch(trimmed, limit, pipelineFiltered = true)
+        if (tagged.isNotEmpty()) return tagged
+
+        // Nothing tagged matched. Retry unfiltered rather than reporting no
+        // results for a model that exists but is not labelled.
+        return rawSearch(trimmed, limit, pipelineFiltered = false)
+    }
+
+    private suspend fun rawSearch(
+        query: String,
+        limit: Int,
+        pipelineFiltered: Boolean,
+    ): List<RemoteModelSummary> {
         val url = buildString {
             append("$BASE/api/models?limit=$limit&sort=downloads&direction=-1")
-            append("&filter=text-generation")
+            if (pipelineFiltered) append("&filter=text-generation")
             if (query.isNotBlank()) {
                 append("&search=").append(query.urlEncoded())
             }
         }
-        return json.decodeFromString(get(url))
+        return runCatching { json.decodeFromString<List<RemoteModelSummary>>(get(url)) }
+            .getOrDefault(emptyList())
     }
+
+    /** Web page for a repository, for accepting a licence. */
+    fun modelPageUrl(repoId: String): String = "$BASE/${repoId.pathEncoded()}"
 
     suspend fun modelInfo(repoId: String): RemoteModelSummary =
         json.decodeFromString(get("$BASE/api/models/${repoId.pathEncoded()}"))

@@ -463,10 +463,20 @@ ConvertResult convert_model(const ConvertOptions & options, const ProgressFn & p
     read_text_file(join_path(options.model_dir, "generation_config.json"),
                    &generation_config_json);
 
+    // Newer exports put the chat template in its own file rather than inside
+    // tokenizer_config.json. Missing it does not fail conversion -- it produces a
+    // model that loads and is then prompted as a base model, which for an
+    // instruct tune is a large and silent quality loss.
+    std::string chat_template;
+    read_text_file(join_path(options.model_dir, "chat_template.jinja"), &chat_template);
+
     Vocab vocab;
     if (!build_vocab(tokenizer_json, tokenizer_config_json, generation_config_json,
                      hp.vocab_size, &vocab, &result.error)) {
         return result;
+    }
+    if (vocab.chat_template.empty() && !chat_template.empty()) {
+        vocab.chat_template = chat_template;
     }
     result.warnings = vocab.warnings;
 

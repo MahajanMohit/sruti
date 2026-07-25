@@ -6,6 +6,7 @@
 
 #include <jni.h>
 #include <android/log.h>
+#include <dirent.h>
 
 #include <chrono>
 #include <cstring>
@@ -107,13 +108,74 @@ Java_dev_sruti_llm_LlamaBridge_nativeBackendInit(
         ggml_backend_load_all();
     }
 
+    // Fallback: load each variant by bare filename.
+    //
+    // The directory scan above only works when the libraries exist on disk. If an
+    // APK is ever packaged with extractNativeLibs=false they stay inside it, the
+    // directory is empty, and nothing registers -- which surfaces to the user as
+    // "no compute backend is available on this device" with no further clue.
+    // Android's linker resolves a bare soname out of the APK regardless, so
+    // asking for them by name works either way.
+    if (ggml_backend_reg_count() == 0) {
+        LOGE("no backends found by scanning %s; falling back to loading by name",
+             dir.c_str());
+
+        // Best first: ggml keeps the highest-scoring one the CPU can execute, and
+        // a variant the device cannot run simply fails to load.
+        static const char * kVariants[] = {
+            "libggml-cpu-android_armv9.2_2.so",
+            "libggml-cpu-android_armv9.2_1.so",
+            "libggml-cpu-android_armv9.0_1.so",
+            "libggml-cpu-android_armv8.6_1.so",
+            "libggml-cpu-android_armv8.2_2.so",
+            "libggml-cpu-android_armv8.2_1.so",
+            "libggml-cpu-android_armv8.0_1.so",
+        };
+        for (const char * name : kVariants) {
+            if (ggml_backend_load(name) != nullptr) {
+                LOGI("loaded backend %s by name", name);
+            }
+        }
+    }
+
     llama_backend_init();
 
-    // Each variant declares a score from the CPU features it needs; ggml keeps
-    // the highest-scoring one the device can actually run.
     LOGI("llama backend initialised, %zu ggml backend(s) registered from %s",
          static_cast<size_t>(ggml_backend_reg_count()),
          dir.empty() ? "(default paths)" : dir.c_str());
+}
+
+/// Diagnostic detail for when no backend loads.
+///
+/// Without this the failure is a bare sentence with nothing to act on; with it,
+/// the library directory and its contents are visible, which is the difference
+/// between guessing and knowing.
+JNIEXPORT jstring JNICALL
+Java_dev_sruti_llm_LlamaBridge_nativeBackendDiagnostics(
+    JNIEnv * env, jobject, jstring native_lib_dir) {
+
+    const std::string dir = jstring_to_utf8(env, native_lib_dir);
+    std::string out = "backends registered: " +
+                      std::to_string(ggml_backend_reg_count()) + "\n";
+    out += "library dir: " + dir + "\n";
+
+    DIR * d = ::opendir(dir.c_str());
+    if (d == nullptr) {
+        out += "  (cannot open directory)\n";
+    } else {
+        int count = 0;
+        while (dirent * entry = ::readdir(d)) {
+            const std::string name = entry->d_name;
+            if (name == "." || name == "..") continue;
+            out += "  " + name + "\n";
+            ++count;
+        }
+        ::closedir(d);
+        if (count == 0) {
+            out += "  (empty — native libraries were not extracted from the APK)\n";
+        }
+    }
+    return env->NewStringUTF(out.c_str());
 }
 
 /// Number of registered ggml backends. Zero means inference cannot work.

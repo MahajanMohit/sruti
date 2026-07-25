@@ -31,6 +31,7 @@ data class LibraryUiState(
     val defaultQuant: QuantType = QuantType.Q4_K_M,
     val job: ModelJobState = ModelJobState.Idle,
     val tokenSet: Boolean = false,
+    val keepCheckpoints: Boolean = false,
     val isLoading: Boolean = true,
 )
 
@@ -76,6 +77,11 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             settings.huggingFaceToken.collect { token ->
                 _library.update { it.copy(tokenSet = !token.isNullOrBlank()) }
+            }
+        }
+        viewModelScope.launch {
+            settings.keepCheckpoints.collect { keep ->
+                _library.update { it.copy(keepCheckpoints = keep) }
             }
         }
         refresh()
@@ -187,6 +193,13 @@ class LibraryViewModel @Inject constructor(
     fun setDefaultQuant(quantType: QuantType) {
         viewModelScope.launch { settings.setDefaultQuantType(quantType) }
     }
+
+    fun setKeepCheckpoints(keep: Boolean) {
+        viewModelScope.launch { settings.setKeepCheckpoints(keep) }
+    }
+
+    /** Web page for a repository, so a gated licence can be accepted. */
+    fun modelPageUrl(repoId: String): String = api.modelPageUrl(repoId)
 
     fun setToken(token: String?) {
         viewModelScope.launch { settings.setHuggingFaceToken(token) }

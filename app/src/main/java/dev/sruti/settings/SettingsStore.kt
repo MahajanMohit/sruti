@@ -2,6 +2,7 @@ package dev.sruti.settings
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -37,6 +38,16 @@ class SettingsStore(private val context: Context) {
      */
     val gpuLayers: Flow<Int> = context.dataStore.data.map { it[GPU_LAYERS_KEY] ?: 0 }
 
+    /**
+     * Whether to keep the downloaded safetensors after converting.
+     *
+     * Off by default because a checkpoint is several times the size of what it
+     * converts to. On, re-converting at a different quantization costs only the
+     * conversion — the gigabytes are already on disk.
+     */
+    val keepCheckpoints: Flow<Boolean> =
+        context.dataStore.data.map { it[KEEP_CHECKPOINTS_KEY] ?: false }
+
     suspend fun currentToken(): String? = huggingFaceToken.first()
 
     suspend fun setHuggingFaceToken(token: String?) {
@@ -55,9 +66,16 @@ class SettingsStore(private val context: Context) {
 
     suspend fun currentGpuLayers(): Int = gpuLayers.first()
 
+    suspend fun setKeepCheckpoints(keep: Boolean) {
+        context.dataStore.edit { it[KEEP_CHECKPOINTS_KEY] = keep }
+    }
+
+    suspend fun currentKeepCheckpoints(): Boolean = keepCheckpoints.first()
+
     private companion object {
         val TOKEN_KEY = stringPreferencesKey("hf_token")
         val QUANT_KEY = stringPreferencesKey("default_quant")
         val GPU_LAYERS_KEY = intPreferencesKey("gpu_layers")
+        val KEEP_CHECKPOINTS_KEY = booleanPreferencesKey("keep_checkpoints")
     }
 }
