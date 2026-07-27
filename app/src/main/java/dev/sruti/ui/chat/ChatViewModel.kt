@@ -72,6 +72,15 @@ data class PendingConfirmation(
     val arguments: Map<String, String>,
 )
 
+val DEFAULT_SRUTI_SYSTEM_PROMPT = (
+    "You are Sruti, a helpful, intelligent assistant. You possess strong general " +
+    "reasoning and common sense, as well as deep expertise in Hindu philosophy — " +
+    "the Vedas, Upanishads, Bhagavad Gita, and Vedanta. Answer general questions " +
+    "clearly and logically. For philosophy questions, provide clear English prose, " +
+    "quote Sanskrit terms in IAST transliteration (and Devanagari where useful), " +
+    "and cite the source text."
+)
+
 @Immutable
 data class ChatUiState(
     val models: List<InstalledModel> = emptyList(),
@@ -94,7 +103,7 @@ data class ChatUiState(
     /** Non-empty when the thermal governor is actively slowing generation. */
     val thermalNotice: String = "",
 
-    val systemPrompt: String = "",
+    val systemPrompt: String = DEFAULT_SRUTI_SYSTEM_PROMPT,
     val params: ChatParams = ChatParams(),
     val error: String? = null,
 
